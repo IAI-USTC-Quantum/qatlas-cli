@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.22.0
+
+- 仓库迁移至 IAI-USTC-Quantum/qatlas-cli；安装方式与版本血统继承自
+  主仓 `quantum-atlas` 包。
+- 新增 PyPI Trusted Publishing 发布流程（tag `v*` 触发）。
+
 ## 0.21.0a3
 
 - CLI 从主仓 QuantumAtlas 拆分为独立仓库；版本号自主仓 `quantum-atlas`
