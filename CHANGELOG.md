@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.22.1
+
+- 客户端/服务端兼容策略调整：由「客户端 x.y ≥ 服务端 x.y」改为「**(major, minor)
+  相同即兼容**」，patch 位随意漂移（如 qatlasd 0.22.4 ↔ qatlas-cli 0.22.3）。
+  两个方向不一致都会给 stderr 警告（带双方版本号与建议动作）；写请求遇更新的
+  服务端仍硬失败（exit code 4）。
+- 升级提示由过时的 `pip install --upgrade quantum-atlas` 改为
+  `uv tool upgrade qatlas-cli`。
+- 与 qatlasd 0.22.x 任意 patch 版本兼容（本次 patch 发布即为该契约的演练）。
+
 ## 0.22.0
 
 - 仓库迁移至 IAI-USTC-Quantum/qatlas-cli；安装方式与版本血统继承自

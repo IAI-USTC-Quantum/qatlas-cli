@@ -406,3 +406,84 @@ def test_do_get_failure_still_prints_defaults_note(monkeypatch, capsys):
     assert "10.x/y → 0811.3171v3" in err
     assert "HTTP 502" in err
     assert "OpenAlex upstream error" in err
+
+
+# ---------------------------------------------------------------------------
+# `paper get pdf` removal + `paper get images` (PDF delivery disabled)
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdf_subcommand_removed(capsys):
+    """`qatlas paper get pdf` no longer exists — the server answers 410."""
+    rc = cli.main(["get", "pdf", "0811.3171v3"])
+    assert rc == 2
+    assert "unknown 'paper get' subcommand" in capsys.readouterr().err
+
+
+def test_status_kind_pdf_rejected():
+    """`paper status --kind pdf` is gone; only markdown remains."""
+    parser = cli.build_status_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["0811.3171v3", "--kind", "pdf"])
+    # Default stays markdown.
+    assert parser.parse_args(["0811.3171v3"]).kind == "markdown"
+
+
+def test_get_images_cache_hit_streams_zip(tmp_path):
+    out_path = tmp_path / "images.zip"
+    args = _args(output=str(out_path))
+    resp_200 = _resp(
+        200,
+        body=b"PK fake zip bytes",
+        headers={"Content-Type": "application/zip"},
+    )
+    with patch.object(cli.requests, "get", return_value=resp_200) as mock_get:
+        rc = cli.cmd_get_images(args)
+    assert rc == 0
+    mock_get.assert_called_once()
+    url = mock_get.call_args[0][0]
+    assert url == "http://server.test/api/papers/0811.3171v3/images/zip"
+    assert out_path.read_bytes() == b"PK fake zip bytes"
+
+
+def test_get_images_404_md_not_ready_hints_markdown_first(capsys):
+    """404 + markdown not ready → hint the user to trigger conversion."""
+    args = _args(output="-")
+    not_found = _resp(404, json_body={"detail": "no images available for 0811.3171v3"})
+    md_status = _resp(200, json_body={"state": "missing", "md_ready": False})
+    with patch.object(cli.requests, "get", side_effect=[not_found, md_status]) as mock_get:
+        rc = cli.cmd_get_images(args)
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "no images available" in err
+    assert "qatlas paper get markdown 0811.3171v3" in err
+    # Second call is the side-effect-free markdown status probe.
+    assert mock_get.call_args_list[1][0][0] == (
+        "http://server.test/api/papers/0811.3171v3/markdown/status"
+    )
+
+
+def test_get_images_404_md_ready_means_no_images(capsys):
+    """404 with markdown already converted → paper genuinely has no
+    images; render the server error without the conversion hint."""
+    args = _args(output="-")
+    not_found = _resp(404, json_body={"detail": "no images available for 0811.3171v3"})
+    md_status = _resp(200, json_body={"state": "cached", "md_ready": True})
+    with patch.object(cli.requests, "get", side_effect=[not_found, md_status]):
+        rc = cli.cmd_get_images(args)
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "no images available" in err
+    assert "hint:" not in err
+
+
+def test_get_images_404_status_probe_failure_still_hints(capsys):
+    """If the markdown status probe itself fails, treat markdown as not
+    ready and still show the conversion hint (best effort)."""
+    args = _args(output="-")
+    not_found = _resp(404, json_body={"detail": "no images available"})
+    probe_fail = _resp(503, json_body={"detail": "catalog unavailable"})
+    with patch.object(cli.requests, "get", side_effect=[not_found, probe_fail]):
+        rc = cli.cmd_get_images(args)
+    assert rc == 1
+    assert "qatlas paper get markdown" in capsys.readouterr().err

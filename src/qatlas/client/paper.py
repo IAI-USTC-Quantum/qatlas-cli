@@ -3,19 +3,23 @@
 Subcommands::
 
     qatlas paper get markdown ID_OR_DOI [--output FILE | --to-stdout]
-    qatlas paper get pdf      ID_OR_DOI [--output FILE | --to-stdout]
-    qatlas paper status       ID_OR_DOI [--kind markdown|pdf]
+    qatlas paper get images   ID_OR_DOI [--output FILE | --to-stdout]
+    qatlas paper status       ID_OR_DOI [--kind markdown]
     qatlas paper mineru-lease ID [--ttl-seconds N]
 
 These wrap the server's paper-access endpoints (only registered when
 ``paper_access.enabled: true`` in the server's config.yaml):
 
     GET /api/papers/{id_or_doi}/markdown[/status]
-    GET /api/papers/{id_or_doi}/pdf[/status]
+    GET /api/papers/{id_or_doi}/images/zip
 
-The endpoints follow a long-running-operation contract: cache miss
-returns 202 + ``Operation-Location``; we transparently poll until
-``state == cached`` (or a terminal failure) then stream the bytes.
+PDF delivery is disabled server-side (``GET .../pdf`` answers 410
+Gone), so there is deliberately no ``paper get pdf`` subcommand.
+The markdown endpoint follows a long-running-operation contract: cache
+miss returns 202 + ``Operation-Location``; we transparently poll until
+``state == cached`` (or a terminal failure) then stream the bytes. The
+images zip has no LRO of its own — it is a byproduct of the MinerU
+conversion, so a 404 means "run ``paper get markdown`` first".
 
 ID forms accepted (server-side auto-resolution):
 
@@ -73,7 +77,7 @@ def _print_notes(response: requests.Response, *, quiet: bool) -> None:
     Both byte-streaming GETs and JSON responses carry the same info
     via ``X-QAtlas-Defaults-Applied`` header; we read the header
     rather than the body so the same code works for 200 text/markdown
-    and 200 application/pdf.
+    and 200 application/zip.
     """
     if quiet:
         return
@@ -267,8 +271,8 @@ def _stream_to_output(response: requests.Response, output: str | None) -> int:
 
 
 def _do_get(args: argparse.Namespace, kind: str) -> int:
-    """Implementation shared by `paper get markdown` and `paper get pdf`."""
-    if kind not in {"markdown", "pdf"}:
+    """Implementation of `paper get markdown` (the only LRO-shaped get)."""
+    if kind not in {"markdown"}:
         raise ValueError(f"unknown kind: {kind!r}")
     base_url = base_url_from_args(args)
     id_or_doi = args.id_or_doi.strip().lstrip("/")
@@ -318,12 +322,9 @@ def _do_get(args: argparse.Namespace, kind: str) -> int:
             return 0
 
         def is_ready(body: dict[str, Any]) -> bool:
-            # For markdown we want both pdf_ready AND md_ready; for pdf
-            # just pdf_ready. State "cached" implies both readiness
-            # flags but check explicitly for clarity.
-            if kind == "markdown":
-                return body.get("state") == "cached" and body.get("md_ready", False)
-            return body.get("state") == "cached" and body.get("pdf_ready", False)
+            # State "cached" implies the readiness flags, but check
+            # md_ready explicitly for clarity.
+            return body.get("state") == "cached" and body.get("md_ready", False)
 
         exit_code, last_body = _poll_until_cached(
             args, base_url, status_url, cached_predicate=is_ready
@@ -364,8 +365,55 @@ def cmd_get_markdown(args: argparse.Namespace) -> int:
     return _do_get(args, "markdown")
 
 
-def cmd_get_pdf(args: argparse.Namespace) -> int:
-    return _do_get(args, "pdf")
+def cmd_get_images(args: argparse.Namespace) -> int:
+    """Fetch the images zip for a paper.
+
+    Unlike markdown there is no LRO here: the zip is a byproduct of the
+    MinerU conversion, so the endpoint is a plain read — 200 streams
+    bytes, 404 means "not converted yet (or no images)". On 404 we
+    probe the side-effect-free markdown status and, when markdown isn't
+    ready either, tell the user to trigger the conversion first.
+    """
+    base_url = base_url_from_args(args)
+    id_or_doi = args.id_or_doi.strip().lstrip("/")
+    resp = requests.get(
+        f"{base_url}/api/papers/{id_or_doi}/images/zip",
+        headers={**auth_headers(args), **client_version_headers()},
+        verify=request_verify(args),
+        timeout=args.request_timeout,
+        stream=True,
+        allow_redirects=True,
+    )
+    check_response_version(resp, write=False)
+    if resp.status_code == 200:
+        _print_notes(resp, quiet=args.quiet_notes)
+        return _stream_to_output(resp, args.output)
+    _print_notes(resp, quiet=args.quiet_notes)
+    print(_render_server_error("images", resp), file=sys.stderr)
+    if resp.status_code == 404 and not _markdown_ready(args, base_url, id_or_doi):
+        print(
+            f"hint: run `qatlas paper get markdown {id_or_doi}` first — the "
+            "MinerU conversion it triggers is what produces the images zip.",
+            file=sys.stderr,
+        )
+    return 1
+
+
+def _markdown_ready(args: argparse.Namespace, base_url: str, id_or_doi: str) -> bool:
+    """Best-effort side-effect-free markdown readiness probe."""
+    try:
+        resp = requests.get(
+            f"{base_url}/api/papers/{id_or_doi}/markdown/status",
+            headers={**auth_headers(args), **client_version_headers()},
+            verify=request_verify(args),
+            timeout=args.request_timeout,
+        )
+        if not resp.ok:
+            return False
+        body = resp.json()
+    except (requests.RequestException, json.JSONDecodeError):
+        return False
+    return isinstance(body, dict) and bool(body.get("md_ready"))
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -491,29 +539,43 @@ def build_get_markdown_parser() -> argparse.ArgumentParser:
     return p
 
 
-def build_get_pdf_parser() -> argparse.ArgumentParser:
+def build_get_images_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="qatlas paper get pdf",
-        description="Fetch a paper's PDF bytes from the server (triggers silent fetch when missing).",
+        prog="qatlas paper get images",
+        description=(
+            "Download a paper's images zip (a byproduct of the MinerU conversion). "
+            "No long-running operation: the server answers 404 until the conversion has run — "
+            "use `qatlas paper get markdown` first to trigger it."
+        ),
     )
     _add_id_arg(p)
-    _add_output_args(p)
+    p.add_argument(
+        "--output",
+        "-o",
+        default=None,
+        help='Write the zip to FILE. Use "-" or omit for stdout.',
+    )
+    p.add_argument(
+        "--quiet-notes",
+        action="store_true",
+        help="Suppress the 'Note (server applied defaults): ...' line on stderr.",
+    )
     add_common_http_args(p)
-    p.set_defaults(func=cmd_get_pdf)
+    p.set_defaults(func=cmd_get_images)
     return p
 
 
 def build_status_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="qatlas paper status",
-        description="Query the side-effect-free status endpoint for a paper (markdown or pdf).",
+        description="Query the side-effect-free status endpoint for a paper (markdown).",
     )
     _add_id_arg(p)
     p.add_argument(
         "--kind",
-        choices=["markdown", "pdf"],
+        choices=["markdown"],
         default="markdown",
-        help='Which status endpoint to hit. Default: markdown.',
+        help='Which status endpoint to hit. Only "markdown" remains — PDF delivery is disabled server-side (410 Gone).',
     )
     p.add_argument(
         "--quiet-notes",
@@ -560,8 +622,8 @@ def _print_top_help() -> None:
 
 Usage:
   qatlas paper get markdown ID_OR_DOI [--output FILE] [--no-wait]
-  qatlas paper get pdf      ID_OR_DOI [--output FILE] [--no-wait]
-  qatlas paper status       ID_OR_DOI [--kind markdown|pdf]
+  qatlas paper get images   ID_OR_DOI [--output FILE]
+  qatlas paper status       ID_OR_DOI [--kind markdown]
   qatlas paper mineru-lease ID_OR_DOI [--ttl-seconds N]
   qatlas paper mineru-lease release ID_OR_DOI CLAIM_ID
 
@@ -570,6 +632,9 @@ ID forms accepted:
   - Bare arxiv id (no version)  0811.3171  (server adds latest vN)
   - Bare old-style (no category) 9508027   (server adds quant-ph/)
   - DOI                          10.1103/PhysRevLett.103.150502
+
+PDF delivery is disabled server-side (GET .../pdf answers 410 Gone);
+use `paper get markdown` (and `paper get images` for the figures zip).
 
 Server-side endpoints must be enabled via ``paper_access.enabled: true``
 in the server's config.yaml. Defaults applied by the server are surfaced
@@ -593,8 +658,8 @@ def main(argv: list[str] | None = None) -> int:
         kind = argv.pop(0)
         if kind == "markdown":
             parser = build_get_markdown_parser()
-        elif kind == "pdf":
-            parser = build_get_pdf_parser()
+        elif kind == "images":
+            parser = build_get_images_parser()
         else:
             print(f"unknown 'paper get' subcommand: {kind!r}", file=sys.stderr)
             _print_top_help()

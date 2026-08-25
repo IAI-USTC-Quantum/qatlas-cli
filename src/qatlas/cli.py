@@ -98,7 +98,7 @@ Aliases:
 
 Examples:
   qatlas paper get markdown quant-ph/9508027 --output paper.md
-  qatlas paper get pdf 10.1103/PhysRevLett.103.150502 -o paper.pdf
+  qatlas paper get images 10.1103/PhysRevLett.103.150502 -o images.zip
   qatlas contrib pdf quant-ph/9508027v1 --pdf paper.pdf
   qatlas contrib mineru 2501.00010v1
   qatlas contrib mineru --watch

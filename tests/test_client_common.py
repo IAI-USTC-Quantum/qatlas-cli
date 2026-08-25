@@ -185,3 +185,88 @@ def test_add_common_http_args_only_registers_request_timeout():
     for removed_flag in ("--base-url", "--token", "--insecure"):
         with pytest.raises(SystemExit):
             parser.parse_args([removed_flag, "value"] if removed_flag != "--insecure" else [removed_flag])
+
+
+# ---------------------------------------------------------------------------
+# Client/server version negotiation — contract (since 0.22.1): equal
+# (major, minor) ⇒ compatible; patch drift is ignored. Mismatch warns in
+# both directions; only write-ops against a NEWER server hard-fail (exit 4).
+# ---------------------------------------------------------------------------
+
+import requests  # noqa: E402
+
+_CLIENT_UNDER_TEST = "0.22.1"
+
+
+def _resp(server_version: str | None) -> requests.Response:
+    """Build a bare Response carrying (or not) the server-version header."""
+    r = requests.Response()
+    if server_version is not None:
+        r.headers["X-Qatlas-Server-Version"] = server_version
+    return r
+
+
+@pytest.fixture
+def _pin_client_version(monkeypatch):
+    """Pin the client version and reset the one-shot warning registry."""
+    monkeypatch.setattr(_common, "_CLIENT_VERSION", _CLIENT_UNDER_TEST)
+    _common._WARNED_VERSION_MISMATCH.clear()
+    yield
+    _common._WARNED_VERSION_MISMATCH.clear()
+
+
+def test_version_check_same_xy_passes(_pin_client_version, capsys):
+    # qatlasd 0.22.4 ↔ qatlas-cli 0.22.1: patch drift, fully compatible.
+    _common.check_response_version(_resp("0.22.4"), write=False)
+    _common.check_response_version(_resp("0.22.0"), write=True)
+    assert capsys.readouterr().err == ""
+
+
+def test_version_check_server_newer_read_warns(_pin_client_version, capsys):
+    _common.check_response_version(_resp("0.23.0"), write=False)
+    err = capsys.readouterr().err
+    assert "WARNING" in err
+    assert "0.23.0" in err and _CLIENT_UNDER_TEST in err
+    assert "uv tool upgrade qatlas-cli" in err
+
+
+def test_version_check_server_newer_read_warns_one_shot(_pin_client_version, capsys):
+    _common.check_response_version(_resp("0.23.0"), write=False)
+    _common.check_response_version(_resp("0.23.0"), write=False)
+    err = capsys.readouterr().err
+    assert err.count("WARNING") == 1
+
+
+def test_version_check_server_newer_write_exits_4(_pin_client_version, capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        _common.check_response_version(_resp("0.23.0"), write=True)
+    assert excinfo.value.code == 4
+    err = capsys.readouterr().err
+    assert "ERROR" in err and "uv tool upgrade qatlas-cli" in err
+
+
+def test_version_check_client_newer_read_warns(_pin_client_version, capsys):
+    _common.check_response_version(_resp("0.21.5"), write=False)
+    err = capsys.readouterr().err
+    assert "WARNING" in err
+    assert "0.21.5" in err and _CLIENT_UNDER_TEST in err
+    assert "0.22.x" in err  # suggests the server line to upgrade to
+
+
+def test_version_check_client_newer_write_only_warns(_pin_client_version, capsys):
+    # Client newer is NEVER a hard fail, even on writes — the operator
+    # controls the server, and most old endpoints still work.
+    _common.check_response_version(_resp("0.21.5"), write=True)
+    err = capsys.readouterr().err
+    assert "WARNING" in err and "ERROR" not in err
+
+
+def test_version_check_missing_header_skips(_pin_client_version, capsys):
+    # Pre-v0.8.0 server: no header → silent skip.
+    _common.check_response_version(_resp(None), write=True)
+    assert capsys.readouterr().err == ""
+
+
+def test_version_check_unparseable_header_fails_open(_pin_client_version, capsys):
+    _common.check_response_version(_resp("dev-build"), write=True)
+    assert capsys.readouterr().err == ""

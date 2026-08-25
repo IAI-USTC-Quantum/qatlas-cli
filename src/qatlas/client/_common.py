@@ -151,27 +151,30 @@ def run_with_request_errors(func, *args, **kwargs) -> int:
 # Client/server version negotiation (since v0.8.0)
 # ---------------------------------------------------------------------------
 #
-# Contract: the client version MUST be >= the server version (major+minor
-# semver). Rationale: when the server adds a new endpoint (e.g. the v0.8.0
-# `upload-mineru` replacing `upload-markdown`), an old client doesn't know
-# the new wire shape and will fail in confusing ways. Forcing client >=
-# server prevents the silent broken state.
+# Contract (since qatlas-cli 0.22.1 / qatlasd 0.22.0): client and server are
+# compatible iff their (major, minor) versions are EQUAL. Patch-level
+# differences are always fine — compatibility fixes only ever bump the patch
+# component, so qatlasd 0.22.4 ↔ qatlas-cli 0.22.3 is a supported pairing.
+# A (major, minor) MISMATCH in either direction is suspect:
+#
+#   * server newer — the server's wire contract may have moved (new endpoints
+#     / fields this client doesn't know). Write ops hard-fail (SystemExit 4)
+#     because silent breakage is the worst failure mode; read ops get a
+#     one-shot stderr warning and keep going.
+#   * client newer — the client may call endpoints the server doesn't have
+#     yet. Always a one-shot stderr warning (never a hard fail): the operator
+#     controls the server, not us, and most old endpoints still work.
 #
 # Mechanism:
-#   1. Every request adds  `X-Qatlas-Client-Version: <version>`  (Headers
+#   1. Every request adds  `X-Qatlas-Client-Version: <version>`  (headers
 #      injected by client_version_headers()). The server logs / future
 #      rate-limit policies can use it.
 #   2. Every response (when from a v0.8.0+ server) includes
-#      `X-Qatlas-Server-Version: <version>`. The client compares major+
-#      minor against its own __version__.
-#   3. If server > client AND the call is a write op → raise SystemExit
-#      (hard fail). Read ops just emit a one-shot stderr warning.
-#   4. If the header is absent (older server) the client treats the
+#      `X-Qatlas-Server-Version: <version>`. The client compares major+minor
+#      against its own __version__.
+#   3. If the header is absent (older server) the client treats the
 #      server as "unknown version" and silently skips negotiation —
 #      forward-compatible with pre-v0.8.0 deployments.
-#
-# Patch-level differences are ignored on purpose: a patch bump is supposed
-# to be backwards-compatible bug-fix, so cross-patch usage is fine.
 
 _VERSION_TUPLE_RE = re.compile(r"^(\d+)\.(\d+)(?:\.(\d+))?(?:[.+-].*)?$")
 
@@ -191,19 +194,22 @@ def client_version_headers() -> dict[str, str]:
     return {"X-Qatlas-Client-Version": _CLIENT_VERSION}
 
 
-_WARNED_OLDER_CLIENT: set[str] = set()
+_WARNED_VERSION_MISMATCH: set[str] = set()
 
 
 def check_response_version(response: requests.Response, *, write: bool) -> None:
     """Compare X-Qatlas-Server-Version against this client's version.
 
+    Compatibility contract: equal (major, minor) ⇒ compatible; patch drift
+    is ignored on purpose. On a (major, minor) mismatch:
+
     * `write=True` callers (POST/PUT/PATCH/DELETE) hard-fail (SystemExit 4)
-      when the server is newer than the client at major+minor level — the
-      server's wire contract may have moved and silent breakage is the
-      worst failure mode.
-    * `write=False` callers (GET, status polls) only emit a one-shot
-      warning per unique server version, so read-mostly workflows still
-      function while signalling the upgrade is needed.
+      only when the server is NEWER than the client — the server's wire
+      contract may have moved and silent breakage is the worst failure
+      mode.
+    * Every other mismatch (reads against a newer server, or any call
+      against an older server) emits a one-shot stderr warning naming both
+      versions and the suggested action, then lets the call through.
 
     Older servers (pre-v0.8.0) don't send the header — we treat the
     absence as "unknown" and do nothing, preserving the new client's
@@ -216,16 +222,26 @@ def check_response_version(response: requests.Response, *, write: bool) -> None:
     client = _parse_semver(_CLIENT_VERSION)
     if server is None or client is None:
         return  # unparseable on either side — fail open, don't block calls
-    if server <= client:
-        return  # client >= server, contract satisfied
-    msg = (
-        f"server version {server_version} is newer than client {_CLIENT_VERSION}.\n"
-        f"This client may not understand new endpoints/fields. Upgrade with:\n"
-        f"  pip install --upgrade quantum-atlas"
-    )
-    if write:
-        print(f"ERROR: {msg}", file=sys.stderr)
-        raise SystemExit(4)
-    if server_version not in _WARNED_OLDER_CLIENT:
+    if server == client:
+        return  # (major, minor) match — compatible, patch drift is fine
+    if server > client:
+        msg = (
+            f"server version {server_version} is newer than client {_CLIENT_VERSION}.\n"
+            f"This client may not understand new endpoints/fields. Upgrade with:\n"
+            f"  uv tool upgrade qatlas-cli"
+        )
+        if write:
+            print(f"ERROR: {msg}", file=sys.stderr)
+            raise SystemExit(4)
+        warn_key = f"newer-server:{server_version}"
+    else:
+        msg = (
+            f"server version {server_version} is older than client {_CLIENT_VERSION}.\n"
+            f"The server may lack endpoints/fields this client expects. "
+            f"Ask the server operator to upgrade qatlasd to the "
+            f"{client[0]}.{client[1]}.x line."
+        )
+        warn_key = f"older-server:{server_version}"
+    if warn_key not in _WARNED_VERSION_MISMATCH:
         print(f"WARNING: {msg}", file=sys.stderr)
-        _WARNED_OLDER_CLIENT.add(server_version)
+        _WARNED_VERSION_MISMATCH.add(warn_key)

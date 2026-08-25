@@ -50,7 +50,7 @@ uv pip install -e .
 ```
 qatlas config   # 管理用户级配置文件（~/.config/qatlas/config.yaml）
 qatlas auth     # 管理各 host 的 PAT / session token（login / status / token / logout）
-qatlas paper    # 从服务端拉取论文 PDF / markdown（静默 fetch + LRO 轮询）
+qatlas paper    # 从服务端拉取论文 markdown / 图片 zip（静默 fetch + LRO 轮询；PDF 交付已在服务端停用）
 qatlas contrib  # 贡献者工作流：上传 PDF（contrib pdf）或本地跑 MinerU 再推送（contrib mineru）
 qatlas parser   # 抓取并解析 arXiv 论文（本地工作区命令）
 ```
@@ -80,6 +80,26 @@ myplugin = "my_package.qatlas_plugin:plugin"
 ```
 
 内置命令优先于插件命令；插件不可用时会被静默跳过，不影响 CLI 本体。
+
+## 版本与兼容性
+
+qatlas-cli 与服务端 qatlasd **各自独立演进版本号**，兼容契约是：
+
+> **两者的 `(major, minor)` 相同即兼容**，patch 位随意漂移。
+> 兼容性修复只 bump patch，例如 qatlasd `0.22.4` ↔ qatlas-cli `0.22.3` 是
+> 受支持的配对；而 `0.23.x` 服务端配 `0.22.x` 客户端则不兼容。
+
+运行行为：CLI 每个请求带 `X-Qatlas-Client-Version` 头，服务端响应带
+`X-Qatlas-Server-Version` 头，客户端据此比较：
+
+- `(major, minor)` 一致：静默通过（patch 差异不算事）；
+- 服务端更新且为写操作：硬失败（exit code 4），提示 `uv tool upgrade qatlas-cli`；
+- 服务端更新且为读操作：stderr 警告一次，继续执行；
+- 客户端更新：stderr 警告一次（提示运维方升级 qatlasd），继续执行；
+- 响应无版本头（0.8.0 之前的老服务端）：跳过协商。
+
+完整策略见主仓文档：
+[QuantumAtlas 版本与兼容策略](https://github.com/IAI-USTC-Quantum/QuantumAtlas/blob/main/docsite/dev/versioning.rst)。
 
 ## 配置
 
