@@ -8,11 +8,25 @@
 
 ## 安装
 
-作为全局 CLI 工具安装（推荐）：
+从 PyPI 安装为全局 CLI 工具（推荐，与拆分前 `quantum-atlas` 的安装方式一致）：
+
+```bash
+# 推荐：uv 全局工具（隔离环境 + 升级方便）
+uv tool install qatlas-cli
+
+# 或 pipx
+pipx install qatlas-cli
+
+# 或 plain pip
+pip install qatlas-cli
+
+qatlas --help
+```
+
+也可以直接从 GitHub 安装：
 
 ```bash
 uv tool install --from git+ssh://git@github.com/IAI-USTC-Quantum/qatlas-cli.git qatlas-cli
-qatlas --help
 ```
 
 本地 editable 安装（开发用）：

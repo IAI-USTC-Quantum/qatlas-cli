@@ -1,6 +1,8 @@
 [project]
 name = "qatlas-cli"
-version = "0.1.0"
+# Version lineage continues from the main-repo `quantum-atlas` package
+# (the CLI was split out at 0.21.0a3); do not restart from 0.x.
+version = "0.21.0a3"
 description = "Command-line client for QuantumAtlas (qatlas CLI)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -37,6 +39,17 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/qatlas"]
+
+# Commitizen: `cz bump` bumps [project].version via the uv provider and
+# tags v<version>; the tag push triggers .github/workflows/release.yml.
+[tool.commitizen]
+name = "cz_conventional_commits"
+tag_format = "v$version"
+version_scheme = "pep440"
+version_provider = "uv"
+update_changelog_on_bump = true
+major_version_zero = true
+annotated_tag = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
