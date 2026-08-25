@@ -8,6 +8,12 @@
 
 ## 安装
 
+> **安装方式变更**：本包拆分自主仓的 `quantum-atlas` Python 包（0.21.0a3 起
+> CLI 不再随主包发布）。PyPI 包名由 `quantum-atlas` 改为 **`qatlas-cli`**，
+> 版本号从 0.21.0a3 延续（首个独立发布为 0.22.0）。之前用
+> `uv tool install quantum-atlas` 安装的用户，改用下面的命令即可，
+> 已有配置（`~/.config/qatlas/config.yaml`、PAT 等）不受影响。
+
 从 PyPI 安装为全局 CLI 工具（推荐，与拆分前 `quantum-atlas` 的安装方式一致）：
 
 ```bash
