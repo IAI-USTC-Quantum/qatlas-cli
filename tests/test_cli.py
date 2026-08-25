@@ -66,7 +66,7 @@ def test_search_command_without_plugin_prints_install_hint(capsys):
     captured = capsys.readouterr()
     assert result == 2
     assert "qatlas-search" in captured.err
-    assert "Agony5757/qatlas-search" in captured.err
+    assert "IAI-USTC-Quantum/qatlas-search" in captured.err
 
 
 def test_dispatches_to_existing_module_cli(monkeypatch):

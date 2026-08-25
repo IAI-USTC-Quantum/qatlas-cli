@@ -11,14 +11,14 @@
 作为全局 CLI 工具安装（推荐）：
 
 ```bash
-uv tool install --from git+ssh://git@github.com/Agony5757/qatlas-cli.git qatlas-cli
+uv tool install --from git+ssh://git@github.com/IAI-USTC-Quantum/qatlas-cli.git qatlas-cli
 qatlas --help
 ```
 
 本地 editable 安装（开发用）：
 
 ```bash
-git clone git@github.com:Agony5757/qatlas-cli.git
+git clone git@github.com:IAI-USTC-Quantum/qatlas-cli.git
 cd qatlas-cli
 uv sync --extra dev          # 项目内 .venv，editable 安装本包
 # 或装入当前环境：
@@ -44,7 +44,7 @@ qatlas contrib pdf quant-ph/9508027v1 --pdf paper.pdf
 qatlas contrib mineru 2501.00010v1
 ```
 
-`search` 命令由独立插件 qatlas-search 提供（仓库 Agony5757/qatlas-search），
+`search` 命令由独立插件 qatlas-search 提供（仓库 IAI-USTC-Quantum/qatlas-search），
 未安装时 `qatlas search` 会给出安装提示。
 
 ### 插件机制

@@ -119,10 +119,10 @@ def _print_search_plugin_hint() -> None:
         "The 'search' command is provided by the standalone plugin "
         "qatlas-search, which is not installed.\n"
         "Install it with pip/uv from the private repository "
-        "Agony5757/qatlas-search, e.g.:\n"
-        "  uv tool install --from git+ssh://git@github.com/Agony5757/qatlas-search.git qatlas-search\n"
+        "IAI-USTC-Quantum/qatlas-search, e.g.:\n"
+        "  uv tool install --from git+ssh://git@github.com/IAI-USTC-Quantum/qatlas-search.git qatlas-search\n"
         "or, into the current environment:\n"
-        "  uv pip install git+ssh://git@github.com/Agony5757/qatlas-search.git",
+        "  uv pip install git+ssh://git@github.com/IAI-USTC-Quantum/qatlas-search.git",
         file=sys.stderr,
     )
 
