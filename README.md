@@ -83,7 +83,7 @@ myplugin = "my_package.qatlas_plugin:plugin"
 
 ## 版本与兼容性
 
-qatlas-cli 与服务端 qatlasd **各自独立演进版本号**，兼容契约是：
+qatlas-cli 与服务端 qatlasd **各自独立演进版本号**，兼容协议是：
 
 > **两者的 `(major, minor)` 相同即兼容**，patch 位随意漂移。
 > 兼容性修复只 bump patch，例如 qatlasd `0.22.4` ↔ qatlas-cli `0.22.3` 是
