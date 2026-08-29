@@ -23,3 +23,23 @@
 - 安装方式与拆分前一致：`uv tool install qatlas-cli`（PyPI）。
 - 发布流程：commitizen（`cz bump`，tag 格式 `v<version>`）打 tag 后由
   `.github/workflows/release.yml` 经 PyPI Trusted Publishing 自动发布。
+
+## v0.23.0 (2026-08-29)
+
+### Feat
+
+- qatlas rag 命令的插件提示
+
+## v0.22.1 (2026-08-26)
+
+### Feat
+
+- x.y compatibility policy; drop paper-get-pdf; add paper-get-images
+
+## v0.22.0 (2026-08-25)
+
+### Fix
+
+- **ci**: grant contents:read so actions/checkout can fetch the tag
+
+## v0.21.0a3 (2026-08-25)
