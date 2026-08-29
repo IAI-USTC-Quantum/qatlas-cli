@@ -112,17 +112,27 @@ def _print_usage_error(message: str) -> None:
     print("Run 'qatlas --help' to see available commands.", file=sys.stderr)
 
 
-def _print_search_plugin_hint() -> None:
-    """Explain that ``search`` ships as the standalone qatlas-search plugin."""
+# Top-level commands that ship as standalone plugins (entry-point group
+# ``qatlas.plugins``). When the user invokes one without the plugin
+# installed, the CLI prints an install hint instead of a bare "unknown
+# command". Maps command name → (package name, GitHub repo).
+_KNOWN_PLUGIN_COMMANDS: dict[str, tuple[str, str]] = {
+    "search": ("qatlas-search", "IAI-USTC-Quantum/qatlas-search"),
+    "rag": ("qatlas-rag", "IAI-USTC-Quantum/qatlas-rag"),
+}
 
+
+def _print_plugin_hint(command_name: str) -> None:
+    """Explain that ``command_name`` ships as a standalone plugin."""
+
+    package, repo = _KNOWN_PLUGIN_COMMANDS[command_name]
     print(
-        "The 'search' command is provided by the standalone plugin "
-        "qatlas-search, which is not installed.\n"
-        "Install it with pip/uv from the private repository "
-        "IAI-USTC-Quantum/qatlas-search, e.g.:\n"
-        "  uv tool install --from git+ssh://git@github.com/IAI-USTC-Quantum/qatlas-search.git qatlas-search\n"
+        f"The '{command_name}' command is provided by the standalone plugin "
+        f"{package}, which is not installed.\n"
+        f"Install it with pip/uv from the private repository {repo}, e.g.:\n"
+        f"  uv tool install --from git+ssh://git@github.com/{repo}.git {package}\n"
         "or, into the current environment:\n"
-        "  uv pip install git+ssh://git@github.com/IAI-USTC-Quantum/qatlas-search.git",
+        f"  uv pip install git+ssh://git@github.com/{repo}.git",
         file=sys.stderr,
     )
 
@@ -181,8 +191,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         except Exception:
             plugin_spec = None
         if plugin_spec is None:
-            if command_name == "search":
-                _print_search_plugin_hint()
+            if command_name in _KNOWN_PLUGIN_COMMANDS:
+                _print_plugin_hint(command_name)
                 return 2
             _print_usage_error(f"unknown command '{args[0]}'")
             return 2

@@ -69,6 +69,16 @@ def test_search_command_without_plugin_prints_install_hint(capsys):
     assert "IAI-USTC-Quantum/qatlas-search" in captured.err
 
 
+def test_rag_command_without_plugin_prints_install_hint(capsys):
+    """`qatlas rag` with no plugin providing it hints at qatlas-rag."""
+    result = cli.main(["rag", "quantum error correction"])
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert "qatlas-rag" in captured.err
+    assert "IAI-USTC-Quantum/qatlas-rag" in captured.err
+
+
 def test_dispatches_to_existing_module_cli(monkeypatch):
     calls = []
     original_argv = sys.argv[:]
