@@ -50,7 +50,7 @@ uv pip install -e .
 ```
 qatlas config   # 管理用户级配置文件（~/.config/qatlas/config.yaml）
 qatlas auth     # 管理各 host 的 PAT / session token（login / status / token / logout）
-qatlas paper    # 从服务端拉取论文 markdown / 图片 zip（静默 fetch + LRO 轮询；PDF 交付已在服务端停用）
+qatlas paper    # 论文元数据（JSON）/ markdown / 图片 zip 拉取（markdown 静默 fetch + LRO 轮询；PDF 交付已在服务端停用）
 qatlas contrib  # 贡献者工作流：上传 PDF（contrib pdf）或本地跑 MinerU 再推送（contrib mineru）
 qatlas parser   # 抓取并解析 arXiv 论文（本地工作区命令）
 ```
@@ -60,6 +60,7 @@ qatlas parser   # 抓取并解析 arXiv 论文（本地工作区命令）
 ```bash
 qatlas auth login                                   # 设备码 / PAT 登录
 qatlas paper get markdown quant-ph/9508027 --output paper.md
+qatlas paper get metadata quant-ph/9508027          # 论文元数据（JSON：paper_id / ids / title / authors / assets；不含 abstract）
 qatlas contrib pdf quant-ph/9508027v1 --pdf paper.pdf
 qatlas contrib mineru 2501.00010v1
 ```

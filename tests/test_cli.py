@@ -38,7 +38,7 @@ def test_top_level_help(capsys):
 def test_readme_documents_uv_tool_install():
     readme = Path("README.md").read_text(encoding="utf-8")
 
-    assert "uv tool install" in readme
+    assert "uv tool install qatlas-cli" in readme
     assert "qatlas --help" in readme
 
 

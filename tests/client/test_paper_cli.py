@@ -409,6 +409,88 @@ def test_do_get_failure_still_prints_defaults_note(monkeypatch, capsys):
 
 
 # ---------------------------------------------------------------------------
+# `paper get metadata` (JSON-only paper detail, no LRO)
+# ---------------------------------------------------------------------------
+
+
+def test_get_metadata_success_prints_json_body(capsys):
+    args = _args()
+    detail = {
+        "paper_id": "qa_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "status": "hosted",
+        "arxiv_id": "0811.3171v3",
+        "doi": "10.1103/PhysRevA.78.012345",
+        "openalex_id": "W1234567890",
+        "paper_ref": "arxiv:0811.3171v3",
+        "title": "A quantum paper",
+        "authors": ["Alice Alpha", "Bob Beta"],
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-02T00:00:00Z",
+        "assets": [],
+        "acquisition": {"source": "arxiv"},
+    }
+    resp_200 = _resp(200, json_body=detail)
+    with patch.object(cli.requests, "get", return_value=resp_200) as mock_get:
+        rc = cli.cmd_get_metadata(args)
+    assert rc == 0
+    mock_get.assert_called_once()
+    # Detail endpoint: the id is the last path segment, no /markdown tail.
+    assert mock_get.call_args[0][0] == "http://server.test/api/papers/0811.3171v3"
+    out = capsys.readouterr().out
+    assert '"paper_id": "qa_01ARZ3NDEKTSV4RRFFQ69G5FAV"' in out
+    assert '"title": "A quantum paper"' in out
+
+
+def test_get_metadata_keeps_slash_ids_raw_in_path():
+    """Old-style arxiv ids and DOIs keep their '/' verbatim — the detail
+    endpoint routes on the raw path, exactly like the markdown endpoint.
+    A leading '/' from sloppy shell completion is stripped."""
+    args = _args(id_or_doi="/quant-ph/9508027")
+    resp_200 = _resp(200, json_body={"paper_id": "qa_1"})
+    with patch.object(cli.requests, "get", return_value=resp_200) as mock_get:
+        rc = cli.cmd_get_metadata(args)
+    assert rc == 0
+    assert mock_get.call_args[0][0] == "http://server.test/api/papers/quant-ph/9508027"
+
+
+def test_get_metadata_error_dumps_server_body_to_stderr(capsys):
+    """4xx/5xx bodies render verbatim (detail / kind) via the shared
+    _render_server_error convention instead of a one-line message."""
+    args = _args(id_or_doi="10.bad/doi")
+    resp_404 = _resp(
+        404,
+        json_body={
+            "detail": "not hosted; resolve metadata via GET /api/papers/lookup?ids=doi:10.bad/doi",
+            "kind": "fatal",
+        },
+    )
+    with patch.object(cli.requests, "get", return_value=resp_404):
+        rc = cli.cmd_get_metadata(args)
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "HTTP 404" in err
+    assert "not hosted" in err
+    assert '"kind"' in err and "fatal" in err
+
+
+def test_get_metadata_parser_carries_common_http_args():
+    """--request-timeout (and friends) parse, mirroring `paper status`."""
+    parser = cli.build_get_metadata_parser()
+    args = parser.parse_args(["0811.3171v3", "--request-timeout", "5"])
+    assert args.request_timeout == 5.0
+    assert args.quiet_notes is False
+
+
+def test_main_dispatches_get_metadata(capsys):
+    resp_200 = _resp(200, json_body={"paper_id": "qa_1", "status": "hosted"})
+    with patch.object(cli.requests, "get", return_value=resp_200) as mock_get:
+        rc = cli.main(["get", "metadata", "0811.3171"])
+    assert rc == 0
+    assert mock_get.call_args[0][0] == "http://server.test/api/papers/0811.3171"
+    assert '"paper_id": "qa_1"' in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
 # `paper get pdf` removal + `paper get images` (PDF delivery disabled)
 # ---------------------------------------------------------------------------
 

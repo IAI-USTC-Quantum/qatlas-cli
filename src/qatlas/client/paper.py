@@ -4,6 +4,7 @@ Subcommands::
 
     qatlas paper get markdown ID_OR_DOI [--output FILE | --to-stdout]
     qatlas paper get images   ID_OR_DOI [--output FILE | --to-stdout]
+    qatlas paper get metadata ID_OR_DOI
     qatlas paper status       ID_OR_DOI [--kind markdown]
     qatlas paper mineru-lease ID [--ttl-seconds N]
 
@@ -12,6 +13,12 @@ These wrap the server's paper-access endpoints (only registered when
 
     GET /api/papers/{id_or_doi}/markdown[/status]
     GET /api/papers/{id_or_doi}/images/zip
+
+Exception: ``get metadata`` hits the paper-detail endpoint
+``GET /api/papers/{id}``, which is plain registry metadata and always
+available (no ``paper_access.enabled`` gate, no LRO, no side effects).
+It prints the JSON response body verbatim; the registry does not store
+abstracts, so none is included.
 
 PDF delivery is disabled server-side (``GET .../pdf`` answers 410
 Gone), so there is deliberately no ``paper get pdf`` subcommand.
@@ -416,6 +423,41 @@ def _markdown_ready(args: argparse.Namespace, base_url: str, id_or_doi: str) -> 
     return isinstance(body, dict) and bool(body.get("md_ready"))
 
 
+def cmd_get_metadata(args: argparse.Namespace) -> int:
+    """Fetch a paper's registry metadata as JSON.
+
+    Plain read of ``GET /api/papers/{id}`` — no LRO polling, no side
+    effects. The id may be a ``qa_`` paper id, an arxiv id (new-style
+    or old-style, with or without version) or a DOI. JSON-only: the
+    whole response body goes to stdout via ``print_json``, mirroring
+    the ``paper status`` output convention. No abstract — the registry
+    does not store one.
+    """
+    base_url = base_url_from_args(args)
+    id_or_doi = args.id_or_doi.strip().lstrip("/")
+    resp = requests.get(
+        f"{base_url}/api/papers/{id_or_doi}",
+        headers={**auth_headers(args), **client_version_headers()},
+        verify=request_verify(args),
+        timeout=args.request_timeout,
+    )
+    check_response_version(resp, write=False)
+    _print_notes(resp, quiet=args.quiet_notes)
+    if not resp.ok:
+        print(_render_server_error("metadata", resp), file=sys.stderr)
+        return 1
+    try:
+        body = resp.json()
+    except json.JSONDecodeError:
+        print(
+            f"non-JSON metadata response:\nHTTP {resp.status_code} {resp.reason}\n{resp.text}",
+            file=sys.stderr,
+        )
+        return 1
+    print_json(body)
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     base_url = base_url_from_args(args)
     id_or_doi = args.id_or_doi.strip().lstrip("/")
@@ -565,6 +607,26 @@ def build_get_images_parser() -> argparse.ArgumentParser:
     return p
 
 
+def build_get_metadata_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="qatlas paper get metadata",
+        description=(
+            "Fetch a paper's registry metadata (paper_id, arxiv/doi/openalex ids, title, "
+            "authors, assets, acquisition) as JSON. Accepts a qa_ paper id, arxiv id "
+            "(versioned or bare) or DOI. No abstract — the registry does not store one."
+        ),
+    )
+    _add_id_arg(p)
+    p.add_argument(
+        "--quiet-notes",
+        action="store_true",
+        help="Suppress the 'Note (server applied defaults): ...' line on stderr.",
+    )
+    add_common_http_args(p)
+    p.set_defaults(func=cmd_get_metadata)
+    return p
+
+
 def build_status_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="qatlas paper status",
@@ -623,6 +685,7 @@ def _print_top_help() -> None:
 Usage:
   qatlas paper get markdown ID_OR_DOI [--output FILE] [--no-wait]
   qatlas paper get images   ID_OR_DOI [--output FILE]
+  qatlas paper get metadata ID_OR_DOI
   qatlas paper status       ID_OR_DOI [--kind markdown]
   qatlas paper mineru-lease ID_OR_DOI [--ttl-seconds N]
   qatlas paper mineru-lease release ID_OR_DOI CLAIM_ID
@@ -660,6 +723,8 @@ def main(argv: list[str] | None = None) -> int:
             parser = build_get_markdown_parser()
         elif kind == "images":
             parser = build_get_images_parser()
+        elif kind == "metadata":
+            parser = build_get_metadata_parser()
         else:
             print(f"unknown 'paper get' subcommand: {kind!r}", file=sys.stderr)
             _print_top_help()
