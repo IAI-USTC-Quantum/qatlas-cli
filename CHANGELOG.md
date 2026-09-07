@@ -24,6 +24,12 @@
 - 发布流程：commitizen（`cz bump`，tag 格式 `v<version>`）打 tag 后由
   `.github/workflows/release.yml` 经 PyPI Trusted Publishing 自动发布。
 
+## v0.24.0 (2026-09-07)
+
+### Feat
+
+- **paper**: get metadata 子命令——按 qa_/arXiv/DOI 拉取论文元数据
+
 ## v0.23.0 (2026-08-29)
 
 ### Feat
