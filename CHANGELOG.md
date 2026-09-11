@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.32.1 (2026-09-12)
+
+### Fix
+
+- pin UTF-8 encoding for config/hosts YAML reads on non-UTF-8 locales
+
 ## v0.32.0 (2026-09-12)
 
 版本对齐 qatlasd 0.32.x 线（兼容协议：`(major, minor)` 相同即兼容）。

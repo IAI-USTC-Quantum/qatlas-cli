@@ -2,7 +2,7 @@
 name = "qatlas-cli"
 # Version lineage continues from the main-repo `quantum-atlas` package
 # (the CLI was split out at 0.21.0a3); do not restart from 0.x.
-version = "0.32.0"
+version = "0.32.1"
 description = "Command-line client for QuantumAtlas (qatlas CLI)"
 readme = "README.md"
 requires-python = ">=3.11"
