@@ -244,7 +244,14 @@ class ServerConfig(BaseSettings):
         sources: list[PydanticBaseSettingsSource] = [init_settings]
         yaml_path = user_config_yaml_path()
         if yaml_path.is_file():
-            sources.append(YamlConfigSettingsSource(settings_cls, yaml_file=yaml_path))
+            # Pin the encoding: without it pydantic-settings opens the
+            # file with the locale codec, which is GBK on zh-CN Windows
+            # and cannot decode the UTF-8 template we write.
+            sources.append(
+                YamlConfigSettingsSource(
+                    settings_cls, yaml_file=yaml_path, yaml_file_encoding="utf-8"
+                )
+            )
         return tuple(sources)
 
     @classmethod

@@ -207,3 +207,76 @@ class TestYamlReadsBackThroughServerConfig:
         cfg = ServerConfig.from_env()
         # Unknown keys don't raise (extra='ignore'); the known field still loads.
         assert cfg.server_url == "https://x"
+
+
+# ---------------------------------------------------------------------------
+# Non-UTF-8 locale regression (zh-CN Windows: default codec is GBK)
+# ---------------------------------------------------------------------------
+
+
+class TestNonUtf8Locale:
+    """The config template is written as UTF-8 (em-dashes in comments);
+    loading it must never depend on the OS locale codec.
+
+    Regression: on zh-CN Windows ``YamlConfigSettingsSource`` opened the
+    file with the GBK locale default and ``qatlas auth login`` died with
+    ``UnicodeDecodeError: 'gbk' codec can't decode byte 0x94`` before
+    even prompting for the host.
+    """
+
+    def _isolate_xdg(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+        return home / ".config" / "qatlas" / "config.yaml"
+
+    def test_utf8_comment_loads_in_process(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Sanity check on any platform: non-ASCII comment + value parse.
+        yaml_path = self._isolate_xdg(tmp_path, monkeypatch)
+        yaml_path.parent.mkdir(parents=True, exist_ok=True)
+        yaml_path.write_bytes(
+            "# QuantumAtlas client config — managed\n"
+            "server_url: https://x.example/\n".encode()
+        )
+        cfg = ServerConfig.from_env()
+        assert cfg.server_url == "https://x.example/"
+
+    def test_server_config_loads_under_ascii_locale(self, tmp_path: Path, c_locale_runner) -> None:
+        # Faithful reproduction of the GBK crash: a fresh interpreter
+        # whose default codec is us-ascii must load the UTF-8 config.
+        # Fails with UnicodeDecodeError when the YAML source is opened
+        # without an explicit encoding.
+        home = tmp_path / "home"
+        yaml_path = home / ".config" / "qatlas" / "config.yaml"
+        yaml_path.parent.mkdir(parents=True)
+        yaml_path.write_bytes(
+            b"# QuantumAtlas client config \xe2\x80\x94 managed\n"
+            b"server_url: https://x.example/\n"
+        )
+        result = c_locale_runner(
+            "from qatlas.config import ServerConfig\n"
+            "cfg = ServerConfig.from_env()\n"
+            "print(cfg.server_url or '')\n",
+            home=home,
+        )
+        assert result.returncode == 0, (
+            f"loading config under a non-UTF-8 locale crashed:\n{result.stderr}"
+        )
+        assert result.stdout.strip() == "https://x.example/"
+
+    def test_default_template_loads_under_ascii_locale(self, tmp_path: Path, c_locale_runner) -> None:
+        # First-run path: no config yet, template (full of `—` / `≥`)
+        # auto-created, then immediately parsed by the same call.
+        home = tmp_path / "home"
+        home.mkdir()
+        result = c_locale_runner(
+            "from qatlas.config import ServerConfig\n"
+            "cfg = ServerConfig.from_env()\n"
+            "print(cfg.server_url or 'unset')\n",
+            home=home,
+        )
+        assert result.returncode == 0, (
+            f"auto-created template failed to load:\n{result.stderr}"
+        )
+        assert result.stdout.strip() == "unset"

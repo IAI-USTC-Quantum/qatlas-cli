@@ -94,7 +94,42 @@ def test_load_malformed_yaml_returns_empty(tmp_path, capsys):
     assert out == {"hosts": {}}
     # User should see a hint, not a silent failure.
     captured = capsys.readouterr()
-    assert "not valid YAML" in captured.err
+    assert "not valid UTF-8 YAML" in captured.err
+
+
+def test_load_gbk_encoded_file_returns_empty(tmp_path, capsys):
+    """A hosts.yml hand-edited in a locale editor (GBK bytes) must warn
+    and degrade to empty — not crash with UnicodeDecodeError.
+    """
+    path = auth.hosts_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes("hosts:\n  x.example:\n    token: qat_a\n  # \u8bc4\u8bba\n".encode("gbk"))
+    out = auth._load_store()
+    assert out == {"hosts": {}}
+    captured = capsys.readouterr()
+    assert "not valid UTF-8 YAML" in captured.err
+
+
+def test_load_utf8_store_under_ascii_locale(tmp_path, c_locale_runner):
+    """Regression (zh-CN Windows): hosts.yml is UTF-8; reading it must
+    not depend on the locale codec. A fresh interpreter whose default
+    codec is us-ascii still resolves the stored token.
+    """
+    home = tmp_path / "home"
+    hosts = home / ".config" / "qatlas" / "hosts.yml"
+    hosts.parent.mkdir(parents=True)
+    hosts.write_bytes(
+        b"hosts:\n  x.example:\n    token: qat_abc\n    # \xe8\xaf\x84\xe8\xae\xba\n"
+    )
+    result = c_locale_runner(
+        "from qatlas.client import auth\n"
+        "print(auth.get_stored_token('https://x.example'))\n",
+        home=home,
+    )
+    assert result.returncode == 0, (
+        f"reading hosts.yml under a non-UTF-8 locale crashed:\n{result.stderr}"
+    )
+    assert result.stdout.strip() == "qat_abc"
 
 
 def test_load_non_dict_yaml_returns_empty(tmp_path):

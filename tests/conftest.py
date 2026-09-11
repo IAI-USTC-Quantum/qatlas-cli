@@ -1,4 +1,9 @@
+from __future__ import annotations
+
 import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -73,3 +78,38 @@ def isolate_project_env(request, monkeypatch):
     _clear_config_env()
     os.environ["QATLAS_SKIP_DOTENV"] = "1"
     os.environ["QUANTUMATLAS_SKIP_DOTENV"] = "1"
+
+
+@pytest.fixture
+def c_locale_runner():
+    """Run a python snippet in a fresh interpreter whose default text
+    encoding is NOT UTF-8 (``LC_ALL=C`` → us-ascii).
+
+    Reproduces on any platform the zh-CN Windows failure mode where
+    ``open()`` / ``read_text()`` without an explicit encoding decode
+    UTF-8 files as GBK and crash with UnicodeDecodeError. The locale is
+    interpreter-startup state, so this cannot be monkeypatched in-proc.
+    """
+    def run(
+        code: str, *, home: Path, timeout: float = 120
+    ) -> subprocess.CompletedProcess[str]:
+        env = {
+            "HOME": str(home),
+            "XDG_CONFIG_HOME": str(home / ".config"),
+            "LC_ALL": "C",
+            "LANG": "C",
+            # Stop CPython from rescuing us: no UTF-8 mode, no PEP 538
+            # locale coercion to C.UTF-8.
+            "PYTHONUTF8": "0",
+            "PYTHONCOERCECLOCALE": "0",
+        }
+        return subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=timeout,
+            check=False,
+        )
+
+    return run

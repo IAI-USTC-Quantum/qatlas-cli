@@ -121,12 +121,14 @@ def _load_store() -> dict[str, Any]:
     if not path.exists():
         return {"hosts": {}}
     try:
-        loaded = yaml.safe_load(path.read_text()) or {}
-    except yaml.YAMLError as exc:
+        # Pinned UTF-8: hosts.yml is written by us as UTF-8; the locale
+        # codec (GBK on zh-CN Windows) cannot decode it.
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (yaml.YAMLError, UnicodeDecodeError) as exc:
         # Don't blow up the user's command — surface a clear hint so
         # they can fix or rm the file.
         print(
-            f"Warning: {path} is not valid YAML ({exc}); treating as empty.",
+            f"Warning: {path} is not valid UTF-8 YAML ({exc}); treating as empty.",
             file=sys.stderr,
         )
         return {"hosts": {}}
@@ -152,7 +154,7 @@ def _save_store(store: dict[str, Any]) -> None:
         pass  # filesystem may not support chmod (Windows, FAT mounts, ...).
 
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(yaml.safe_dump(store, sort_keys=True))
+    tmp.write_text(yaml.safe_dump(store, sort_keys=True), encoding="utf-8")
     try:
         os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)  # 0600
     except OSError:
