@@ -107,6 +107,9 @@ Examples:
   qatlas contrib mineru 2501.00010v1
   qatlas contrib mineru --watch
 
+Documentation:
+  https://qatlas.hfnl.app.chenzhaoyun.com/doc/guide/cli.html
+
 Use "qatlas <command> --help" for command-specific options."""
     )
 

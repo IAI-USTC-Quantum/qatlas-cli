@@ -59,8 +59,10 @@ qatlas parser   # 抓取并解析 arXiv 论文（本地工作区命令）
 别名：`papers` → `paper`，`parse` → `parser`。
 
 完整子命令参考（config / auth / paper / contrib / parser 的全部子命令、
-标志与示例）见任一 qatlasd 实例文档站的 `/doc/guide/cli/`
-（源码：主仓 `QuantumAtlas/docsite/guide/cli.rst`）。
+标志与示例，含论文搜索 `qatlas search` 的详细用法）见文档站
+<https://qatlas.hfnl.app.chenzhaoyun.com/doc/guide/cli.html>
+（默认线上实例；源码：主仓 `QuantumAtlas/docsite/guide/cli.rst`，
+任一 qatlasd 实例的 `/doc/guide/cli.html` 均可访问）。
 
 ```bash
 qatlas auth login                                   # 设备码 / PAT 登录

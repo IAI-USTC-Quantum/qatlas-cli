@@ -33,6 +33,8 @@ def test_top_level_help(capsys):
     assert "contrib" in client_section
     assert "parser" not in client_section
     assert "parser" in local_section
+    # The help must carry a publicly reachable documentation link.
+    assert "https://qatlas.hfnl.app.chenzhaoyun.com/doc/guide/cli.html" in captured.out
 
 
 def test_readme_documents_uv_tool_install():
