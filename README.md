@@ -50,7 +50,8 @@ uv pip install -e .
 ```
 qatlas config   # 管理用户级配置文件（~/.config/qatlas/config.yaml）
 qatlas auth     # 管理各 host 的 PAT / session token（login / status / token / logout）
-qatlas paper    # 论文元数据（JSON）/ markdown / 图片 zip 拉取（markdown 静默 fetch + LRO 轮询；PDF 交付已在服务端停用）
+qatlas paper    # 论文工作流：get markdown/images/metadata、status、mineru-lease，
+                #   目录检索 list / lookup，批量下载 fetch 与进度 jobs
 qatlas contrib  # 贡献者工作流：上传 PDF（contrib pdf）或本地跑 MinerU 再推送（contrib mineru）
 qatlas parser   # 抓取并解析 arXiv 论文（本地工作区命令）
 ```
@@ -84,6 +85,16 @@ qatlas contrib mineru 2501.00010v1
 [project.entry-points."qatlas.plugins"]
 myplugin = "my_package.qatlas_plugin:plugin"
 ```
+
+**协议 v2**：`CommandSpec.handler` 支持 `(ctx, argv)` 双参数签名——`ctx`
+是 `CliContext`（已解析的 server URL / token / 超时 / TLS 选项，来源与
+内置命令相同的 config.yaml + hosts.yml）。配套的公共 HTTP 层在
+`qatlas.client.pluginsupport`（`server_request` / `format_api_error` /
+`poll_lro`），插件服务器调用自动获得 PAT 注入、版本协商头与统一错误
+格式，无需自行实现。v1 的 `(argv)` 单参数签名继续可用（CLI 按签名探测
+分发）；插件声明 `cli_api_version` 高于 CLI 提供的 `PLUGIN_API_VERSION`
+时其命令被跳过并给出一行警告。完整协议说明见任一 qatlasd 实例文档站的
+`/doc/guide/cli/`「插件协议」小节。
 
 内置命令优先于插件命令；插件不可用时会被静默跳过，不影响 CLI 本体。
 

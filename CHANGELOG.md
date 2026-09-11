@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- **`qatlas paper fetch`**：批量提交下载（`POST /api/downloader/fetch`，
+  `papers:write`）——混合 DOI / arXiv ID / 论文链接，单次 ≤50 条，支持
+  `--file`；输出逐项入队结果与 enqueued 汇总。
+- **`qatlas paper jobs`**：下载进度（`papers:read`）——本地任务快照与
+  counters，`--remote` 查询持久化 outbound fleet 快照，`--watch` 轮询至
+  空闲，`--json` 机器可读（watch 模式 JSON lines）。
+- **`qatlas paper list`**：目录检索（`GET /api/papers`）——`--has-md` /
+  `--status` / `-q` / 身份精确过滤 / 分页排序。
+- **`qatlas paper lookup`**：批量引用解析（`GET /api/papers/lookup`）——
+  `arxiv:` / `doi:` / `openalex:` 引用 ≤200 条，报告 hosted / has_md。
+- **插件协议 v2**：`CommandSpec.handler` 支持 `(ctx, argv)` 签名，`ctx` 为
+  `CliContext`（已解析 server URL / token / 超时 / TLS）；新增插件公共
+  HTTP 层 `qatlas.client.pluginsupport`（`server_request` /
+  `format_api_error` / `poll_lro`）；`PLUGIN_API_VERSION` 与
+  `cli_api_version` 版本协商（过新插件跳过 + 一行警告）；
+  `CommandSpec.usage` 在 `qatlas --help` 展示。v1 `(argv)` 签名完全兼容。
+
 ## 0.22.1
 
 - 客户端/服务端兼容策略调整：由「客户端 x.y ≥ 服务端 x.y」改为「**(major, minor)

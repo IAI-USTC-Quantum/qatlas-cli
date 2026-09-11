@@ -6,6 +6,10 @@ Subcommands::
     qatlas paper get images   ID_OR_DOI [--output FILE | --to-stdout]
     qatlas paper get metadata ID_OR_DOI
     qatlas paper status       ID_OR_DOI [--kind markdown]
+    qatlas paper list         [--has-md true] [--status …] [-q …] [--json]
+    qatlas paper lookup       REF... [--json]
+    qatlas paper fetch        ID|DOI|URL... [--file FILE] [--json]
+    qatlas paper jobs         [--remote] [--watch] [--json]
     qatlas paper mineru-lease ID [--ttl-seconds N]
 
 These wrap the server's paper-access endpoints (only registered when
@@ -64,6 +68,7 @@ from qatlas.client._common import (
     request_verify,
     run_with_request_errors,
 )
+from qatlas.client.downloader import build_fetch_parser, build_jobs_parser
 
 
 # Maximum total wall-time we spend polling the LRO status endpoint
@@ -458,6 +463,105 @@ def cmd_get_metadata(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_list(args: argparse.Namespace) -> int:
+    """Paginated registry listing — GET /api/papers with filters."""
+    params: dict[str, str] = {}
+    if args.has_md is not None:
+        params["has_md"] = str(args.has_md).lower()
+    if args.status:
+        params["status"] = args.status
+    if args.q:
+        params["q"] = args.q
+    if args.arxiv_id:
+        params["arxiv_id"] = args.arxiv_id
+    if args.doi:
+        params["doi"] = args.doi
+    if args.paper_id:
+        params["paper_id"] = args.paper_id
+    if args.page:
+        params["page"] = str(args.page)
+    if args.per_page:
+        params["per_page"] = str(args.per_page)
+    if args.sort:
+        params["sort"] = args.sort
+    resp = requests.get(
+        f"{base_url_from_args(args)}/api/papers",
+        params=params or None,
+        headers={**auth_headers(args), **client_version_headers()},
+        verify=request_verify(args),
+        timeout=args.request_timeout,
+    )
+    check_response_version(resp, write=False)
+    if not resp.ok:
+        print(_render_server_error("list", resp), file=sys.stderr)
+        return 1
+    try:
+        body = resp.json()
+    except json.JSONDecodeError:
+        print(f"non-JSON list response:\nHTTP {resp.status_code} {resp.reason}\n{resp.text}", file=sys.stderr)
+        return 1
+    if args.json:
+        print_json(body)
+        return 0
+    items = body.get("items", [])
+    print(
+        f"{body.get('total', len(items))} paper(s) "
+        f"(page {body.get('page', 1)}, {body.get('per_page', len(items))} per page)"
+    )
+    for it in items:
+        title = (it.get("title") or "").replace("\n", " ")
+        if len(title) > 64:
+            title = title[:64] + "…"
+        md = "md:yes" if it.get("has_md") else "md:no "
+        print(f"  {it.get('paper_id')} {md} {it.get('status', '-'):<7} {title}")
+    return 0
+
+
+def cmd_lookup(args: argparse.Namespace) -> int:
+    """Batch reference resolution — GET /api/papers/lookup?ids=…."""
+    refs = [r.strip() for r in args.refs if r and r.strip()]
+    if not refs:
+        print("no references given — pass kind:id refs (arxiv:… / doi:… / openalex:…)", file=sys.stderr)
+        return 2
+    if len(refs) > 200:
+        print(f"{len(refs)} refs exceeds the server limit of 200 per call", file=sys.stderr)
+        return 2
+    resp = requests.get(
+        f"{base_url_from_args(args)}/api/papers/lookup",
+        params={"ids": ",".join(refs)},
+        headers={**auth_headers(args), **client_version_headers()},
+        verify=request_verify(args),
+        timeout=args.request_timeout,
+    )
+    check_response_version(resp, write=False)
+    if not resp.ok:
+        print(_render_server_error("lookup", resp), file=sys.stderr)
+        return 1
+    try:
+        body = resp.json()
+    except json.JSONDecodeError:
+        print(f"non-JSON lookup response:\nHTTP {resp.status_code} {resp.reason}\n{resp.text}", file=sys.stderr)
+        return 1
+    if args.json:
+        print_json(body)
+        return 0
+    if not body.get("corpus_available", True):
+        print(
+            "note: OpenAlex corpus unavailable on the server — resolution may be limited",
+            file=sys.stderr,
+        )
+    for r in body.get("results", []):
+        if not r.get("resolved"):
+            print(f"  {r.get('ref')}: unresolved")
+            continue
+        flags = ["hosted" if r.get("hosted") else "not hosted"]
+        if r.get("has_md"):
+            flags.append("markdown ready")
+        year = f" ({r['year']})" if r.get("year") else ""
+        print(f"  {r.get('ref')}: {', '.join(flags)}{year} — {r.get('title') or '(no title)'}")
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     base_url = base_url_from_args(args)
     id_or_doi = args.id_or_doi.strip().lstrip("/")
@@ -627,6 +731,58 @@ def build_get_metadata_parser() -> argparse.ArgumentParser:
     return p
 
 
+def build_list_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="qatlas paper list",
+        description="Paginated listing of registry papers with optional filters.",
+    )
+    p.add_argument(
+        "--has-md",
+        dest="has_md",
+        type=lambda v: v.lower() in {"1", "true", "yes"},
+        default=None,
+        help="filter on converted markdown present (true/false)",
+    )
+    p.add_argument(
+        "--status",
+        choices=["pending", "ready", "failed"],
+        default=None,
+        help="filter by lifecycle status",
+    )
+    p.add_argument("-q", help="case-insensitive title substring filter")
+    p.add_argument("--arxiv-id", help="exact identity filter (version suffix tolerated)")
+    p.add_argument("--doi", help="exact identity filter (URL prefix tolerated)")
+    p.add_argument("--paper-id", help="exact identity filter (qa_ id)")
+    p.add_argument("--page", type=int, default=None, help="1-based page number")
+    p.add_argument("--per-page", type=int, default=None, help="page size (server caps it)")
+    p.add_argument(
+        "--sort",
+        choices=["created_at", "updated_at"],
+        default=None,
+        help="sort column (descending)",
+    )
+    p.add_argument("--json", action="store_true", help="print the raw server response as JSON")
+    add_common_http_args(p)
+    p.set_defaults(func=cmd_list)
+    return p
+
+
+def build_lookup_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="qatlas paper lookup",
+        description=(
+            "Resolve up to 200 namespaced references (arxiv:… / doi:… / openalex:…) "
+            "against the registry + OpenAlex corpus; reports hosted / markdown state "
+            "for each."
+        ),
+    )
+    p.add_argument("refs", nargs="+", help="kind:id references (comma-free; one per argument)")
+    p.add_argument("--json", action="store_true", help="print the raw server response as JSON")
+    add_common_http_args(p)
+    p.set_defaults(func=cmd_lookup)
+    return p
+
+
 def build_status_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="qatlas paper status",
@@ -687,6 +843,10 @@ Usage:
   qatlas paper get images   ID_OR_DOI [--output FILE]
   qatlas paper get metadata ID_OR_DOI
   qatlas paper status       ID_OR_DOI [--kind markdown]
+  qatlas paper list         [--has-md true] [--status …] [-q …] [--json]
+  qatlas paper lookup       arxiv:ID | doi:DOI | openalex:ID ... [--json]
+  qatlas paper fetch        ID|DOI|URL... [--file FILE] [--json]
+  qatlas paper jobs         [--remote] [--watch] [--json]
   qatlas paper mineru-lease ID_OR_DOI [--ttl-seconds N]
   qatlas paper mineru-lease release ID_OR_DOI CLAIM_ID
 
@@ -731,6 +891,14 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     elif subcommand == "status":
         parser = build_status_parser()
+    elif subcommand == "list":
+        parser = build_list_parser()
+    elif subcommand == "lookup":
+        parser = build_lookup_parser()
+    elif subcommand == "fetch":
+        parser = build_fetch_parser()
+    elif subcommand == "jobs":
+        parser = build_jobs_parser()
     elif subcommand in {"mineru-lease", "claim"}:
         prog_base = "qatlas paper mineru-lease" if subcommand == "mineru-lease" else "qatlas paper claim"
         if argv and argv[0] == "release":

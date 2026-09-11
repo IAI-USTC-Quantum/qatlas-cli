@@ -59,8 +59,11 @@ def test_unknown_command_returns_usage_error(capsys):
     assert "qatlas --help" in captured.err
 
 
-def test_search_command_without_plugin_prints_install_hint(capsys):
+def test_search_command_without_plugin_prints_install_hint(capsys, monkeypatch):
     """`qatlas search` with no plugin providing it hints at qatlas-search."""
+    from qatlas.client.plugins import registry
+
+    monkeypatch.setattr(registry, "top_level_commands", lambda: {})
     result = cli.main(["search", "quantum teleportation"])
 
     captured = capsys.readouterr()
@@ -69,8 +72,11 @@ def test_search_command_without_plugin_prints_install_hint(capsys):
     assert "IAI-USTC-Quantum/qatlas-search" in captured.err
 
 
-def test_rag_command_without_plugin_prints_install_hint(capsys):
+def test_rag_command_without_plugin_prints_install_hint(capsys, monkeypatch):
     """`qatlas rag` with no plugin providing it hints at qatlas-rag."""
+    from qatlas.client.plugins import registry
+
+    monkeypatch.setattr(registry, "top_level_commands", lambda: {})
     result = cli.main(["rag", "quantum error correction"])
 
     captured = capsys.readouterr()

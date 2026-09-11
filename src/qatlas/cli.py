@@ -35,7 +35,7 @@ COMMANDS: Mapping[str, Command] = {
     ),
     "paper": Command(
         "qatlas.client.paper",
-        "Fetch paper PDF / markdown from the server (silent fetch + LRO polling for cache misses)",
+        "Paper workflows: get markdown/images/metadata, status, list, lookup, batch fetch, downloader jobs",
     ),
     "contrib": Command(
         "qatlas.client.contrib",
@@ -88,7 +88,11 @@ Commands:"""
     if plugin_cmds:
         print("\n  Plugin commands:")
         for name in sorted(plugin_cmds):
-            print(f"    {name:<10} {plugin_cmds[name].summary}")
+            spec = plugin_cmds[name]
+            print(f"    {name:<10} {spec.summary}")
+            usage = getattr(spec, "usage", None)
+            if usage:
+                print(f"    {'':10} {usage}")
 
     print(
         """
@@ -115,11 +119,14 @@ def _print_usage_error(message: str) -> None:
 # Top-level commands that ship as standalone plugins (entry-point group
 # ``qatlas.plugins``). When the user invokes one without the plugin
 # installed, the CLI prints an install hint instead of a bare "unknown
-# command". Maps command name → (package name, GitHub repo).
-_KNOWN_PLUGIN_COMMANDS: dict[str, tuple[str, str]] = {
-    "search": ("qatlas-search", "IAI-USTC-Quantum/qatlas-search"),
-    "rag": ("qatlas-rag", "IAI-USTC-Quantum/qatlas-rag"),
-}
+# command". The table lives in the plugin registry so it stays next to the
+# discovery code; the fallback covers a broken plugins package.
+try:
+    from qatlas.client.plugins.registry import (
+        KNOWN_STANDALONE_PLUGINS as _KNOWN_PLUGIN_COMMANDS,
+    )
+except Exception:  # pragma: no cover - defensive, mirrors dispatch fallback
+    _KNOWN_PLUGIN_COMMANDS: dict[str, tuple[str, str]] = {}
 
 
 def _print_plugin_hint(command_name: str) -> None:
@@ -215,7 +222,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             pass
 
     if plugin_spec is not None:
-        return plugin_spec.handler(args[1:])
+        from qatlas.client.plugins import registry
+
+        ctx = registry.build_cli_context()
+        return registry.invoke(plugin_spec, ctx, args[1:])
 
     return _run_module(
         command.module,
