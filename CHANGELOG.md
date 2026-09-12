@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.33.0 (2026-09-12)
+
+### Feat
+
+- **cli**: hint qatlas match as a known standalone plugin
+
 ## v0.32.1 (2026-09-12)
 
 ### Fix
