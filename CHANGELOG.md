@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.34.0 (2026-09-12)
+
+### Feat
+
+- **`qatlas paper get figures`**：图注索引（`GET /api/papers/{id}/figures`）——图组、图注、单图下载 URL 的 JSON。
+- **`qatlas paper get image ID NAME`**：单图下载（无需整包 zip）。
+- **`qatlas paper status`** 支持多 ID：两个及以上自动切换批量端点 `GET /api/papers/status/batch`，单 ID 行为不变。
+
+版本对齐 qatlasd 0.34.x 线（兼容协议：`(major, minor)` 相同即兼容）。
+
 ## v0.33.0 (2026-09-12)
 
 ### Feat
