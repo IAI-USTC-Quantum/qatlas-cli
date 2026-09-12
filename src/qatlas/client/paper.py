@@ -411,6 +411,62 @@ def cmd_get_images(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_get_figures(args: argparse.Namespace) -> int:
+    """Fetch a paper's figure/caption index as JSON.
+
+    Plain read of ``GET /api/papers/{id}/figures`` — figure groups from
+    the MinerU markdown with captions, per-image sizes and per-image
+    download URLs. No LRO; answers 200 with ``markdown_ready: false``
+    when the paper has no converted markdown yet.
+    """
+    base_url = base_url_from_args(args)
+    id_or_doi = args.id_or_doi.strip().lstrip("/")
+    resp = requests.get(
+        f"{base_url}/api/papers/{id_or_doi}/figures",
+        headers={**auth_headers(args), **client_version_headers()},
+        verify=request_verify(args),
+        timeout=args.request_timeout,
+    )
+    check_response_version(resp, write=False)
+    _print_notes(resp, quiet=args.quiet_notes)
+    if not resp.ok:
+        print(_render_server_error("figures", resp), file=sys.stderr)
+        return 1
+    try:
+        print_json(resp.json())
+    except json.JSONDecodeError:
+        print(f"non-JSON figures response:\nHTTP {resp.status_code} {resp.reason}\n{resp.text}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_get_image(args: argparse.Namespace) -> int:
+    """Download one image file from a paper's images bundle.
+
+    ``name`` is the sha256-hex filename reported by
+    ``qatlas paper get figures`` (its ``images[].name`` / ``url`` fields).
+    Plain byte read of ``GET /api/papers/{id}/images/{name}``.
+    """
+    base_url = base_url_from_args(args)
+    id_or_doi = args.id_or_doi.strip().lstrip("/")
+    name = args.name.strip().strip("/")
+    resp = requests.get(
+        f"{base_url}/api/papers/{id_or_doi}/images/{name}",
+        headers={**auth_headers(args), **client_version_headers()},
+        verify=request_verify(args),
+        timeout=args.request_timeout,
+        stream=True,
+        allow_redirects=True,
+    )
+    check_response_version(resp, write=False)
+    if resp.status_code == 200:
+        _print_notes(resp, quiet=args.quiet_notes)
+        return _stream_to_output(resp, args.output)
+    _print_notes(resp, quiet=args.quiet_notes)
+    print(_render_server_error("image", resp), file=sys.stderr)
+    return 1
+
+
 def _markdown_ready(args: argparse.Namespace, base_url: str, id_or_doi: str) -> bool:
     """Best-effort side-effect-free markdown readiness probe."""
     try:
@@ -564,8 +620,37 @@ def cmd_lookup(args: argparse.Namespace) -> int:
 
 def cmd_status(args: argparse.Namespace) -> int:
     base_url = base_url_from_args(args)
-    id_or_doi = args.id_or_doi.strip().lstrip("/")
+    raw_ids = args.id_or_doi
+    if isinstance(raw_ids, str):
+        raw_ids = [raw_ids]
+    ids = [i.strip().lstrip("/") for i in raw_ids if i and i.strip()]
     kind = args.kind
+
+    if len(ids) > 1:
+        # Batch: one round-trip via the server's status/batch endpoint.
+        if kind != "markdown":
+            print("--kind is only valid with a single id (the batch endpoint reports all kinds at once)", file=sys.stderr)
+            return 2
+        resp = requests.get(
+            f"{base_url}/api/papers/status/batch",
+            params={"ids": ",".join(ids)},
+            headers={**auth_headers(args), **client_version_headers()},
+            verify=request_verify(args),
+            timeout=args.request_timeout,
+        )
+        check_response_version(resp, write=False)
+        _print_notes(resp, quiet=args.quiet_notes)
+        if not resp.ok:
+            print(_render_server_error("status batch", resp), file=sys.stderr)
+            return 1
+        try:
+            print_json(resp.json())
+        except json.JSONDecodeError:
+            print(f"non-JSON status response:\nHTTP {resp.status_code} {resp.reason}\n{resp.text}", file=sys.stderr)
+            return 1
+        return 0
+
+    id_or_doi = ids[0]
     url = f"{base_url}/api/papers/{id_or_doi}/{kind}/status"
     resp = requests.get(
         url,
@@ -786,9 +871,19 @@ def build_lookup_parser() -> argparse.ArgumentParser:
 def build_status_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="qatlas paper status",
-        description="Query the side-effect-free status endpoint for a paper (markdown).",
+        description=(
+            "Query the side-effect-free status endpoint for one paper, or the batch "
+            "endpoint (md/pdf readiness, image count, phase) for several at once."
+        ),
     )
-    _add_id_arg(p)
+    p.add_argument(
+        "id_or_doi",
+        nargs="+",
+        help=(
+            "arxiv id (versioned or bare) OR DOI OR qa_ paper id. One id queries the "
+            "per-paper status endpoint; two or more ids switch to the batch endpoint."
+        ),
+    )
     p.add_argument(
         "--kind",
         choices=["markdown"],
@@ -802,6 +897,55 @@ def build_status_parser() -> argparse.ArgumentParser:
     )
     add_common_http_args(p)
     p.set_defaults(func=cmd_status)
+    return p
+
+
+def build_get_figures_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="qatlas paper get figures",
+        description=(
+            "Fetch a paper's figure/caption index as JSON: figure groups with "
+            "captions (when the markdown has them), per-image sizes and single-image "
+            "download URLs. Requires the MinerU markdown to exist."
+        ),
+    )
+    _add_id_arg(p)
+    p.add_argument(
+        "--quiet-notes",
+        action="store_true",
+        help="Suppress the 'Note (server applied defaults): ...' line on stderr.",
+    )
+    add_common_http_args(p)
+    p.set_defaults(func=cmd_get_figures)
+    return p
+
+
+def build_get_image_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="qatlas paper get image",
+        description=(
+            "Download a single image file from a paper's images bundle. NAME is the "
+            "sha256-hex filename from `qatlas paper get figures`."
+        ),
+    )
+    _add_id_arg(p)
+    p.add_argument(
+        "name",
+        help="image file name, e.g. 3afe9563bed1...e965e5.jpg (see `paper get figures`)",
+    )
+    p.add_argument(
+        "--output",
+        "-o",
+        default=None,
+        help='Write the image to FILE. Use "-" or omit for stdout.',
+    )
+    p.add_argument(
+        "--quiet-notes",
+        action="store_true",
+        help="Suppress the 'Note (server applied defaults): ...' line on stderr.",
+    )
+    add_common_http_args(p)
+    p.set_defaults(func=cmd_get_image)
     return p
 
 
@@ -841,8 +985,10 @@ def _print_top_help() -> None:
 Usage:
   qatlas paper get markdown ID_OR_DOI [--output FILE] [--no-wait]
   qatlas paper get images   ID_OR_DOI [--output FILE]
+  qatlas paper get figures  ID_OR_DOI
+  qatlas paper get image    ID_OR_DOI NAME [-o FILE]
   qatlas paper get metadata ID_OR_DOI
-  qatlas paper status       ID_OR_DOI [--kind markdown]
+  qatlas paper status       ID_OR_DOI [ID_OR_DOI ...] [--kind markdown]
   qatlas paper list         [--has-md true] [--status …] [-q …] [--json]
   qatlas paper lookup       arxiv:ID | doi:DOI | openalex:ID ... [--json]
   qatlas paper fetch        ID|DOI|URL... [--file FILE] [--json]
@@ -883,6 +1029,10 @@ def main(argv: list[str] | None = None) -> int:
             parser = build_get_markdown_parser()
         elif kind == "images":
             parser = build_get_images_parser()
+        elif kind == "figures":
+            parser = build_get_figures_parser()
+        elif kind == "image":
+            parser = build_get_image_parser()
         elif kind == "metadata":
             parser = build_get_metadata_parser()
         else:

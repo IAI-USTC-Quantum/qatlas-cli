@@ -35,7 +35,7 @@ COMMANDS: Mapping[str, Command] = {
     ),
     "paper": Command(
         "qatlas.client.paper",
-        "Paper workflows: get markdown/images/metadata, status, list, lookup, batch fetch, downloader jobs",
+        "Paper workflows: get markdown/images/figures/image/metadata, status (single or batch), list, lookup, batch fetch, downloader jobs",
     ),
     "contrib": Command(
         "qatlas.client.contrib",

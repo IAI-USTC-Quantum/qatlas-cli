@@ -509,6 +509,92 @@ def test_status_kind_pdf_rejected():
         parser.parse_args(["0811.3171v3", "--kind", "pdf"])
     # Default stays markdown.
     assert parser.parse_args(["0811.3171v3"]).kind == "markdown"
+    # Two or more ids are accepted (batch mode).
+    parsed = parser.parse_args(["0811.3171v3", "2401.00001"])
+    assert parsed.id_or_doi == ["0811.3171v3", "2401.00001"]
+
+
+def test_status_single_id_uses_per_paper_endpoint(capsys):
+    """One id keeps the classic .../markdown/status call."""
+    args = _args()
+    resp = _resp(200, json_body={"md_ready": True, "pdf_ready": True})
+    with patch.object(cli.requests, "get", return_value=resp) as mock_get:
+        rc = cli.cmd_status(args)
+    assert rc == 0
+    assert mock_get.call_args[0][0] == "http://server.test/api/papers/0811.3171v3/markdown/status"
+    assert '"md_ready": true' in capsys.readouterr().out
+
+
+def test_status_multiple_ids_use_batch_endpoint(capsys):
+    """Two+ ids switch to GET /api/papers/status/batch?ids=..."""
+    args = _args(id_or_doi=["0811.3171v3", "2401.00001", " 10.1103/x.y "])
+    batch = _resp(
+        200,
+        json_body={"results": [{"requested_id": "0811.3171v3", "md_ready": True}]},
+    )
+    with patch.object(cli.requests, "get", return_value=batch) as mock_get:
+        rc = cli.cmd_status(args)
+    assert rc == 0
+    call = mock_get.call_args
+    assert call[0][0] == "http://server.test/api/papers/status/batch"
+    assert call[1]["params"] == {"ids": "0811.3171v3,2401.00001,10.1103/x.y"}
+    assert '"results"' in capsys.readouterr().out
+
+
+def test_status_batch_kind_rejected():
+    args = _args(id_or_doi=["a", "b"], kind="pdf")
+    with pytest.raises(SystemExit):
+        cli.build_status_parser().parse_args(["a", "b", "--kind", "pdf"])
+    with patch.object(cli.requests, "get"):
+        assert cli.cmd_status(args) == 2
+
+
+def test_get_figures_prints_json(capsys):
+    args = _args()
+    resp = _resp(
+        200,
+        json_body={
+            "paper_id": "qa_1",
+            "markdown_ready": True,
+            "figures": [{"fig_no": 1, "caption": "FIG. 1. …", "images": []}],
+        },
+    )
+    with patch.object(cli.requests, "get", return_value=resp) as mock_get:
+        rc = cli.cmd_get_figures(args)
+    assert rc == 0
+    assert mock_get.call_args[0][0] == "http://server.test/api/papers/0811.3171v3/figures"
+    out = capsys.readouterr().out
+    assert '"figures"' in out and '"fig_no": 1' in out
+
+
+def test_get_figures_error_path(capsys):
+    args = _args()
+    with patch.object(cli.requests, "get", return_value=_resp(404, json_body={"detail": "no such paper"})):
+        rc = cli.cmd_get_figures(args)
+    assert rc == 1
+    assert "no such paper" in capsys.readouterr().err
+
+
+def test_get_image_streams_bytes(tmp_path):
+    out_path = tmp_path / "fig.jpg"
+    args = _args(output=str(out_path), name="3afe9563bed1fb64e1d3a78c8ba075f9000804181d1931c9235683f9ffa965e5.jpg")
+    resp = _resp(200, body=b"\xff\xd8 jpeg bytes", headers={"Content-Type": "image/jpeg"})
+    with patch.object(cli.requests, "get", return_value=resp) as mock_get:
+        rc = cli.cmd_get_image(args)
+    assert rc == 0
+    url = mock_get.call_args[0][0]
+    assert url == (
+        "http://server.test/api/papers/0811.3171v3/images/"
+        "3afe9563bed1fb64e1d3a78c8ba075f9000804181d1931c9235683f9ffa965e5.jpg"
+    )
+    assert out_path.read_bytes() == b"\xff\xd8 jpeg bytes"
+
+
+def test_get_image_404_fails(capsys):
+    args = _args(output="-", name="3afe9563bed1fb64e1d3a78c8ba075f9000804181d1931c9235683f9ffa965e5.jpg")
+    with patch.object(cli.requests, "get", return_value=_resp(404, json_body={"detail": "no such image"})):
+        rc = cli.cmd_get_image(args)
+    assert rc == 1
 
 
 def test_get_images_cache_hit_streams_zip(tmp_path):
