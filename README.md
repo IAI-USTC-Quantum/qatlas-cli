@@ -73,8 +73,10 @@ qatlas contrib mineru 2501.00010v1
 ```
 
 `search` 命令由独立插件 qatlas-search 提供（仓库 IAI-USTC-Quantum/qatlas-search），
-`rag` 命令由独立插件 qatlas-rag 提供（仓库 IAI-USTC-Quantum/qatlas-rag）；
-未安装时 `qatlas search` 或 `qatlas rag` 会给出对应的安装提示。
+`rag` 命令由独立插件 qatlas-rag 提供（仓库 IAI-USTC-Quantum/qatlas-rag），
+`match` 命令由独立插件 qatlas-match 提供（仓库 IAI-USTC-Quantum/qatlas-match，
+论文身份高精度匹配：判定 DOI/arXiv/OpenAlex/URL/标题是否已入库并返回统一 qa_ id）；
+未安装时 `qatlas search` / `qatlas rag` / `qatlas match` 会给出对应的安装提示。
 
 ### 插件机制
 

@@ -30,6 +30,7 @@ from .base import PLUGIN_API_VERSION, CliContext, CommandSpec, QatlasPlugin
 KNOWN_STANDALONE_PLUGINS: dict[str, tuple[str, str]] = {
     "search": ("qatlas-search", "IAI-USTC-Quantum/qatlas-search"),
     "rag": ("qatlas-rag", "IAI-USTC-Quantum/qatlas-rag"),
+    "match": ("qatlas-match", "IAI-USTC-Quantum/qatlas-match"),
 }
 
 

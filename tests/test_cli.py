@@ -87,6 +87,19 @@ def test_rag_command_without_plugin_prints_install_hint(capsys, monkeypatch):
     assert "IAI-USTC-Quantum/qatlas-rag" in captured.err
 
 
+def test_match_command_without_plugin_prints_install_hint(capsys, monkeypatch):
+    """`qatlas match` with no plugin providing it hints at qatlas-match."""
+    from qatlas.client.plugins import registry
+
+    monkeypatch.setattr(registry, "top_level_commands", lambda: {})
+    result = cli.main(["match", "2401.12345"])
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert "qatlas-match" in captured.err
+    assert "IAI-USTC-Quantum/qatlas-match" in captured.err
+
+
 def test_dispatches_to_existing_module_cli(monkeypatch):
     calls = []
     original_argv = sys.argv[:]
