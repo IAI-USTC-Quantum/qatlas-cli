@@ -44,7 +44,8 @@ def _stub_config(monkeypatch):
     monkeypatch.setattr(dl, "auth_headers", lambda args: {"Authorization": "Bearer t"})
     monkeypatch.setattr(dl, "client_version_headers", lambda: {})
     monkeypatch.setattr(dl, "request_verify", lambda args: True)
-    monkeypatch.setattr(dl, "check_response_version", lambda resp, write: None)
+    monkeypatch.setattr(dl, "check_response_version", lambda resp, **kwargs: None)
+    monkeypatch.setattr(dl, "check_server_before_write", lambda *args, **kwargs: None)
 
 
 # ---------------------------------------------------------------------------

@@ -55,6 +55,7 @@ from qatlas.client._common import (
     auth_headers,
     base_url_from_args,
     check_response_version,
+    check_server_before_write,
     client_version_headers,
     print_json,
     request_verify,
@@ -112,18 +113,23 @@ def cmd_upload_pdf(args: argparse.Namespace) -> int:
     url = f"{base_url}/api/papers/{quote(args.arxiv_id, safe='')}/upload-pdf"
 
     try:
+        headers = {**auth_headers(args), **client_version_headers()}
+        verify = request_verify(args)
+        check_server_before_write(
+            base_url, headers=headers, timeout=args.request_timeout, verify=verify
+        )
         response = requests.post(
             url,
             files=files,
             params=params,
-            headers={**auth_headers(args), **client_version_headers()},
+            headers=headers,
             timeout=args.request_timeout,
-            verify=request_verify(args),
+            verify=verify,
         )
     finally:
         files["pdf"][1].close()
 
-    check_response_version(response, write=True)
+    check_response_version(response, write=True, request_sent=True)
 
     if not response.ok:
         return _http_error_exit(response)
@@ -166,18 +172,23 @@ def cmd_upload_mineru(args: argparse.Namespace) -> int:
     url = f"{base_url}/api/papers/{quote(args.arxiv_id, safe='')}/upload-mineru"
 
     try:
+        headers = {**auth_headers(args), **client_version_headers()}
+        verify = request_verify(args)
+        check_server_before_write(
+            base_url, headers=headers, timeout=args.request_timeout, verify=verify
+        )
         response = requests.post(
             url,
             files=files,
             params=params,
-            headers={**auth_headers(args), **client_version_headers()},
+            headers=headers,
             timeout=args.request_timeout,
-            verify=request_verify(args),
+            verify=verify,
         )
     finally:
         files["mineru_zip"][1].close()
 
-    check_response_version(response, write=True)
+    check_response_version(response, write=True, request_sent=True)
 
     if not response.ok:
         return _http_error_exit(response)

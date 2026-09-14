@@ -63,6 +63,7 @@ from qatlas.client._common import (
     auth_headers,
     base_url_from_args,
     check_response_version,
+    check_server_before_write,
     client_version_headers,
     print_json,
     request_verify,
@@ -681,14 +682,19 @@ def cmd_mineru_lease(args: argparse.Namespace) -> int:
     params: dict[str, Any] = {}
     if args.ttl_seconds is not None:
         params["ttl_seconds"] = args.ttl_seconds
+    headers = {**auth_headers(args), **client_version_headers()}
+    verify = request_verify(args)
+    check_server_before_write(
+        base_url, headers=headers, timeout=args.request_timeout, verify=verify
+    )
     resp = requests.post(
         f"{base_url}/api/v1/papers/{arxiv_id}/mineru-lease",
         params=params or None,
-        headers={**auth_headers(args), **client_version_headers()},
-        verify=request_verify(args),
+        headers=headers,
+        verify=verify,
         timeout=args.request_timeout,
     )
-    check_response_version(resp, write=True)
+    check_response_version(resp, write=True, request_sent=True)
     if resp.status_code != 201:
         print(_render_server_error("mineru lease", resp), file=sys.stderr)
         return 1
@@ -703,13 +709,18 @@ def cmd_release_mineru_lease(args: argparse.Namespace) -> int:
     base_url = base_url_from_args(args)
     arxiv_id = args.id_or_doi.strip().lstrip("/")
     claim_id = args.claim_id.strip()
+    headers = {**auth_headers(args), **client_version_headers()}
+    verify = request_verify(args)
+    check_server_before_write(
+        base_url, headers=headers, timeout=args.request_timeout, verify=verify
+    )
     resp = requests.delete(
         f"{base_url}/api/v1/papers/{arxiv_id}/mineru-lease/{claim_id}",
-        headers={**auth_headers(args), **client_version_headers()},
-        verify=request_verify(args),
+        headers=headers,
+        verify=verify,
         timeout=args.request_timeout,
     )
-    check_response_version(resp, write=True)
+    check_response_version(resp, write=True, request_sent=True)
     if resp.status_code != 204:
         print(_render_server_error("mineru lease release", resp), file=sys.stderr)
         return 1

@@ -57,13 +57,20 @@ def server_request(
     when unset), the ``X-Qatlas-Client-Version`` negotiation header, the
     request timeout, and the TLS-verification override from the client
     config. On a ``(major, minor)`` version mismatch the shared policy in
-    ``qatlas.client._common.check_response_version`` applies — write
-    operations against a newer server hard-fail with ``SystemExit(4)``.
+    ``qatlas.client._common.check_response_version`` applies — explicit
+    ``write=True`` operations probe ``/api/server/info`` first and refuse a
+    newer server with ``SystemExit(4)`` before sending the write. Failed
+    probes raise ``requests.RequestException`` (404 permits legacy servers).
+    Actual write responses only warn on version drift; writes are not retried.
 
     ``path`` is joined onto ``ctx.server_base_url`` (leading slash optional).
     Raises ``ValueError`` when no server is configured.
     """
-    from qatlas.client._common import check_response_version, client_version_headers
+    from qatlas.client._common import (
+        check_response_version,
+        check_server_before_write,
+        client_version_headers,
+    )
 
     base = (ctx.server_base_url or "").rstrip("/")
     if not base:
@@ -72,16 +79,22 @@ def server_request(
         )
     url = f"{base}/{path.lstrip('/')}"
     headers = {**ctx.auth_headers(), **client_version_headers()}
+    request_timeout = timeout or ctx.request_timeout
+    verify = _verify_flag(ctx)
+    if write:
+        check_server_before_write(
+            base, headers=headers, timeout=request_timeout, verify=verify
+        )
     response = requests.request(
         method,
         url,
         json=json,
         params=params,
         headers=headers,
-        timeout=timeout or ctx.request_timeout,
-        verify=_verify_flag(ctx),
+        timeout=request_timeout,
+        verify=verify,
     )
-    check_response_version(response, write=write)
+    check_response_version(response, write=write, request_sent=True)
     return response
 
 

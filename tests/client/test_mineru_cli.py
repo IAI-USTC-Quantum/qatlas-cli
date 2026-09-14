@@ -241,8 +241,9 @@ def _mock_needs_mineru(candidates: List[Dict[str, Any]]) -> MagicMock:
 
 @pytest.fixture(autouse=True)
 def _skip_version_check() -> Any:
-    """check_response_version expects a real Response with .headers; bypass."""
-    with patch("qatlas.client.mineru.check_response_version"):
+    """Orchestration tests bypass negotiation; test_write_preflight covers it."""
+    with patch("qatlas.client.mineru.check_response_version"), \
+         patch("qatlas.client.mineru.check_server_before_write"):
         yield
 
 

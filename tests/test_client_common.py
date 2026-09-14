@@ -190,7 +190,7 @@ def test_add_common_http_args_only_registers_request_timeout():
 # ---------------------------------------------------------------------------
 # Client/server version negotiation — contract (since 0.22.1): equal
 # (major, minor) ⇒ compatible; patch drift is ignored. Mismatch warns in
-# both directions; only write-ops against a NEWER server hard-fail (exit 4).
+# both directions; only write preflights against a NEWER server hard-fail (exit 4).
 # ---------------------------------------------------------------------------
 
 import requests  # noqa: E402
@@ -218,7 +218,7 @@ def _pin_client_version(monkeypatch):
 def test_version_check_same_xy_passes(_pin_client_version, capsys):
     # qatlasd 0.22.4 ↔ qatlas-cli 0.22.1: patch drift, fully compatible.
     _common.check_response_version(_resp("0.22.4"), write=False)
-    _common.check_response_version(_resp("0.22.0"), write=True)
+    _common.check_response_version(_resp("0.22.0"), write=True, request_sent=False)
     assert capsys.readouterr().err == ""
 
 
@@ -237,12 +237,22 @@ def test_version_check_server_newer_read_warns_one_shot(_pin_client_version, cap
     assert err.count("WARNING") == 1
 
 
-def test_version_check_server_newer_write_exits_4(_pin_client_version, capsys):
+def test_version_check_server_newer_write_preflight_exits_4(_pin_client_version, capsys):
     with pytest.raises(SystemExit) as excinfo:
-        _common.check_response_version(_resp("0.23.0"), write=True)
+        _common.check_response_version(_resp("0.23.0"), write=True, request_sent=False)
     assert excinfo.value.code == 4
     err = capsys.readouterr().err
     assert "ERROR" in err and "uv tool upgrade qatlas-cli" in err
+    assert "Write request was not sent" in err
+
+
+def test_version_check_write_response_defaults_to_already_sent(_pin_client_version, capsys):
+    # Existing/third-party response callers must not accidentally claim that
+    # an already-sent write was refused if they omit the new keyword.
+    _common.check_response_version(_resp("0.23.0"), write=True)
+    err = capsys.readouterr().err
+    assert "WARNING" in err and "already sent" in err
+    assert "ERROR" not in err and "was not sent" not in err
 
 
 def test_version_check_client_newer_read_warns(_pin_client_version, capsys):
@@ -253,20 +263,20 @@ def test_version_check_client_newer_read_warns(_pin_client_version, capsys):
     assert "0.22.x" in err  # suggests the server line to upgrade to
 
 
-def test_version_check_client_newer_write_only_warns(_pin_client_version, capsys):
+def test_version_check_client_newer_write_preflight_only_warns(_pin_client_version, capsys):
     # Client newer is NEVER a hard fail, even on writes — the operator
     # controls the server, and most old endpoints still work.
-    _common.check_response_version(_resp("0.21.5"), write=True)
+    _common.check_response_version(_resp("0.21.5"), write=True, request_sent=False)
     err = capsys.readouterr().err
     assert "WARNING" in err and "ERROR" not in err
 
 
 def test_version_check_missing_header_skips(_pin_client_version, capsys):
     # Pre-v0.8.0 server: no header → silent skip.
-    _common.check_response_version(_resp(None), write=True)
+    _common.check_response_version(_resp(None), write=True, request_sent=False)
     assert capsys.readouterr().err == ""
 
 
 def test_version_check_unparseable_header_fails_open(_pin_client_version, capsys):
-    _common.check_response_version(_resp("dev-build"), write=True)
+    _common.check_response_version(_resp("dev-build"), write=True, request_sent=False)
     assert capsys.readouterr().err == ""

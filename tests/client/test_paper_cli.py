@@ -80,7 +80,8 @@ def _stub_config(monkeypatch):
     monkeypatch.setattr(cli, "auth_headers", lambda args: {"Authorization": "Bearer test"})
     monkeypatch.setattr(cli, "client_version_headers", lambda: {})
     monkeypatch.setattr(cli, "request_verify", lambda args: True)
-    monkeypatch.setattr(cli, "check_response_version", lambda resp, write: None)
+    monkeypatch.setattr(cli, "check_response_version", lambda resp, **kwargs: None)
+    monkeypatch.setattr(cli, "check_server_before_write", lambda *args, **kwargs: None)
 
 
 # ---------------------------------------------------------------------------

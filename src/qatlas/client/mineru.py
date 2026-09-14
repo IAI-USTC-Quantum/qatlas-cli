@@ -73,6 +73,7 @@ from qatlas.client._common import (
     auth_headers,
     base_url_from_args,
     check_response_version,
+    check_server_before_write,
     client_version_headers,
     print_json,
     request_verify,
@@ -239,22 +240,26 @@ def _claim_one(
         f"{base_url}/api/v1/papers/{arxiv_id}/mineru-lease",
         f"{base_url}/api/papers/{arxiv_id}/mineru-claim",
     ]
+    headers = {**headers, **client_version_headers()}
     try:
+        check_server_before_write(
+            base_url, headers=headers, timeout=request_timeout, verify=verify
+        )
         resp = None
         for i, url in enumerate(urls):
             resp = requests.post(
                 url,
                 params=params or None,
-                headers={**headers, **client_version_headers()},
+                headers=headers,
                 timeout=request_timeout,
                 verify=verify,
             )
+            check_response_version(resp, write=True, request_sent=True)
             if resp.status_code != 404 or i == len(urls) - 1:
                 break
     except requests.RequestException as exc:
         return None, f"claim request errored: {exc}"
     assert resp is not None
-    check_response_version(resp, write=True)
     if resp.status_code == 201:
         return resp.json(), None
     if resp.status_code in (404, 409):
@@ -275,18 +280,26 @@ def _release_claim(
     verify: bool,
     headers: dict[str, str],
 ) -> None:
+    """Best-effort cleanup of an acquired lease, even during version drift.
+
+    Unlike the explicit paper lease-release command, cleanup must not gain a
+    preflight dependency or raise a version refusal that masks the original
+    failure. Only warn on the response to the already-sent DELETE.
+    """
     urls = [
         f"{base_url}/api/v1/papers/{arxiv_id}/mineru-lease/{claim_id}",
         f"{base_url}/api/papers/{arxiv_id}/mineru-claim/{claim_id}",
     ]
+    headers = {**headers, **client_version_headers()}
     try:
         for i, url in enumerate(urls):
             resp = requests.delete(
                 url,
-                headers={**headers, **client_version_headers()},
+                headers=headers,
                 timeout=request_timeout,
                 verify=verify,
             )
+            check_response_version(resp, write=True, request_sent=True)
             if resp.status_code != 404 or i == len(urls) - 1:
                 break
     except requests.RequestException as exc:
@@ -450,17 +463,21 @@ def _upload_mineru_zip(
         params["overwrite"] = "true"
     if pdf_sha256:
         params["pdf_sha256"] = pdf_sha256
+    headers = {**headers, **client_version_headers()}
+    check_server_before_write(
+        base_url, headers=headers, timeout=request_timeout, verify=verify
+    )
     with zip_path.open("rb") as fh:
         files = {"mineru_zip": (zip_path.name, fh, "application/zip")}
         resp = requests.post(
             f"{base_url}/api/papers/{arxiv_id}/upload-mineru",
             files=files,
             params=params,
-            headers={**headers, **client_version_headers()},
+            headers=headers,
             timeout=request_timeout,
             verify=verify,
         )
-    check_response_version(resp, write=True)
+    check_response_version(resp, write=True, request_sent=True)
     if not resp.ok:
         return False, _http_error(resp, f"MinerU upload for {arxiv_id}")
     return True, resp.json()
@@ -614,7 +631,8 @@ def _process_one(
             verify=verify, headers=headers,
         )
         return EXIT_DAILY_LIMIT
-    except Exception:
+    except (Exception, SystemExit):
+        # A refused upload preflight exits 4, but we still own this lease.
         _release_claim(
             base_url,
             arxiv_id,

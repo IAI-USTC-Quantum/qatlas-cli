@@ -28,6 +28,7 @@ from qatlas.client._common import (
     auth_headers,
     base_url_from_args,
     check_response_version,
+    check_server_before_write,
     client_version_headers,
     print_json,
     request_verify,
@@ -80,14 +81,20 @@ def cmd_fetch(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+    base_url = base_url_from_args(args)
+    headers = {**auth_headers(args), **client_version_headers()}
+    verify = request_verify(args)
+    check_server_before_write(
+        base_url, headers=headers, timeout=args.request_timeout, verify=verify
+    )
     resp = requests.post(
-        f"{base_url_from_args(args)}/api/downloader/fetch",
+        f"{base_url}/api/downloader/fetch",
         json={"items": items},
-        headers={**auth_headers(args), **client_version_headers()},
-        verify=request_verify(args),
+        headers=headers,
+        verify=verify,
         timeout=args.request_timeout,
     )
-    check_response_version(resp, write=True)
+    check_response_version(resp, write=True, request_sent=True)
     if not resp.ok:
         print(_render_error("fetch", resp), file=sys.stderr)
         return 1

@@ -197,16 +197,57 @@ def client_version_headers() -> dict[str, str]:
 _WARNED_VERSION_MISMATCH: set[str] = set()
 
 
-def check_response_version(response: requests.Response, *, write: bool) -> None:
+def check_server_before_write(
+    base_url: str,
+    *,
+    headers: dict[str, str],
+    timeout: float,
+    verify: bool,
+) -> None:
+    """Check the same server's public info endpoint before sending a write.
+
+    No cache or retries: every logical write probes with its own headers,
+    timeout and TLS policy, but without its payload/query parameters. A 404
+    permits legacy servers without this endpoint; missing/unparseable version
+    headers retain the legacy fail-open policy. All other non-2xx statuses
+    (including redirects) and transport failures prevent the write. The header
+    is still checked on 404, so a known newer server cannot bypass the guard.
+    """
+    try:
+        response = requests.get(
+            f"{base_url.rstrip('/')}/api/server/info",
+            headers=headers,
+            timeout=timeout,
+            verify=verify,
+            allow_redirects=False,
+        )
+    except requests.RequestException as exc:
+        raise requests.RequestException(
+            f"Version preflight failed; write request was not sent: {exc}"
+        ) from exc
+    if response.status_code != 404 and not 200 <= response.status_code < 300:
+        raise requests.HTTPError(
+            f"Version preflight failed: HTTP {response.status_code}; "
+            "write request was not sent.",
+            response=response,
+        )
+    check_response_version(response, write=True, request_sent=False)
+
+
+def check_response_version(
+    response: requests.Response, *, write: bool, request_sent: bool = True
+) -> None:
     """Compare X-Qatlas-Server-Version against this client's version.
 
     Compatibility contract: equal (major, minor) ⇒ compatible; patch drift
     is ignored on purpose. On a (major, minor) mismatch:
 
-    * `write=True` callers (POST/PUT/PATCH/DELETE) hard-fail (SystemExit 4)
-      only when the server is NEWER than the client — the server's wire
-      contract may have moved and silent breakage is the worst failure
-      mode.
+    * `write=True, request_sent=False` preflight checks hard-fail
+      (SystemExit 4) only when the server is NEWER than the client. Only a
+      preflight may set `request_sent=False`. Ordinary responses default to
+      `request_sent=True`: a deployment can change after the probe, but a
+      sent write must never be reported as a version-policy refusal. Such
+      responses only warn, leaving success/error handling to the caller.
     * Every other mismatch (reads against a newer server, or any call
       against an older server) emits a one-shot stderr warning naming both
       versions and the suggested action, then lets the call through.
@@ -230,10 +271,16 @@ def check_response_version(response: requests.Response, *, write: bool) -> None:
             f"This client may not understand new endpoints/fields. Upgrade with:\n"
             f"  uv tool upgrade qatlas-cli"
         )
-        if write:
-            print(f"ERROR: {msg}", file=sys.stderr)
+        if write and not request_sent:
+            print(f"ERROR: {msg}\nWrite request was not sent.", file=sys.stderr)
             raise SystemExit(4)
         warn_key = f"newer-server:{server_version}"
+        if write and request_sent:
+            msg += (
+                "\nThe write request was already sent; this warning does not mean "
+                "it was refused. Check the response/result before retrying."
+            )
+            warn_key += ":request-sent"
     else:
         msg = (
             f"server version {server_version} is older than client {_CLIENT_VERSION}.\n"
