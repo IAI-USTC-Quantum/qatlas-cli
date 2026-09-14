@@ -111,17 +111,14 @@ qatlas-cli 与服务端 qatlasd **各自独立演进版本号**，兼容协议�
 > 受支持的配对；而 `0.23.x` 服务端配 `0.22.x` 客户端则不兼容。
 
 运行行为：CLI 每个请求带 `X-Qatlas-Client-Version` 头，服务端响应带
-`X-Qatlas-Server-Version` 头，客户端据此比较：
+`X-Qatlas-Server-Version` 头。明确写操作先探测 `GET /api/server/info`，
+再发业务请求：
 
 - `(major, minor)` 一致：静默通过（patch 差异不算事）；
-- 服务端更新且为写操作：硬失败（exit code 4），提示 `uv tool upgrade qatlas-cli`；
-- 服务端更新且为读操作：stderr 警告一次，继续执行；
+- 服务端更新且为写：探测阶段硬失败（exit code 4），提示 `uv tool upgrade qatlas-cli`，**不发送写请求**。探测失败（404 除外）同样不发送。请求已发出后版本变化只警告，不表示写入被拒绝或未发出；
+- 服务端更新且为读：stderr 警告一次，继续执行；
 - 客户端更新：stderr 警告一次（提示运维方升级 qatlasd），继续执行；
-- 响应无版本头或版本无法解析：跳过协商。
-
-**现有限制**：比较发生在业务响应收到之后；即使 CLI 报 exit code 4，写请求也可能
-已经执行。这不是业务调用前的兼容握手，也不能用来保证写操作未发生；
-前置握手需另行定义跨仓 API 和迁移方案。
+- 响应无版本头或版本无法解析：跳过协商；info 接口 404 视为老服务端，仍允许写。
 
 完整策略见主仓文档：
 [QuantumAtlas 版本与兼容策略](https://github.com/IAI-USTC-Quantum/QuantumAtlas/blob/main/docsite/dev/versioning.rst)。
