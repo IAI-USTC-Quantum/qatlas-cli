@@ -8,9 +8,7 @@ tests run offline and don't need a running qatlasd.
 from __future__ import annotations
 
 import argparse
-import io
 import json
-import sys
 from typing import Any
 from unittest.mock import MagicMock, patch
 

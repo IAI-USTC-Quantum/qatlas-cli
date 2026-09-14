@@ -40,7 +40,7 @@ uv tool install --from git+ssh://git@github.com/IAI-USTC-Quantum/qatlas-cli.git 
 ```bash
 git clone git@github.com:IAI-USTC-Quantum/qatlas-cli.git
 cd qatlas-cli
-uv sync --extra dev          # 项目内 .venv，editable 安装本包
+uv sync --locked --extra dev # 项目内 .venv，按锁文件 editable 安装本包
 # 或装入当前环境：
 uv pip install -e .
 ```
@@ -117,7 +117,11 @@ qatlas-cli 与服务端 qatlasd **各自独立演进版本号**，兼容协议�
 - 服务端更新且为写操作：硬失败（exit code 4），提示 `uv tool upgrade qatlas-cli`；
 - 服务端更新且为读操作：stderr 警告一次，继续执行；
 - 客户端更新：stderr 警告一次（提示运维方升级 qatlasd），继续执行；
-- 响应无版本头（0.8.0 之前的老服务端）：跳过协商。
+- 响应无版本头或版本无法解析：跳过协商。
+
+**现有限制**：比较发生在业务响应收到之后；即使 CLI 报 exit code 4，写请求也可能
+已经执行。这不是业务调用前的兼容握手，也不能用来保证写操作未发生。本次版本与
+发布流程治理不改变兼容策略；前置握手需另行定义跨仓 API 和迁移方案。
 
 完整策略见主仓文档：
 [QuantumAtlas 版本与兼容策略](https://github.com/IAI-USTC-Quantum/QuantumAtlas/blob/main/docsite/dev/versioning.rst)。
@@ -130,11 +134,72 @@ qatlas-cli 与服务端 qatlasd **各自独立演进版本号**，兼容协议�
 
 ## 开发与测试
 
+默认分支是 **master**，支持 Python 3.11+，CI 使用 Python 3.11 和 uv 0.11.30。
+依赖由 `pyproject.toml` / `uv.lock` 管理；只有有意更新依赖时才运行 `uv lock`。
+
 ```bash
-uv sync --extra dev
-uv run pytest -q        # 默认全离线；真打外网的用例标了 network，需 -m network 显式开启
+uv sync --locked --extra dev
+uv run --no-sync ruff check .
+uv run --no-sync python -m pytest
 ```
 
-测试覆盖：CLI 命令分发与版本解析、auth（设备码登录 / token 存储，mock HTTP）、
-paper / contrib / config 命令行为（mock 服务端）、parser 的 arXiv 抓取与
-MinerU 客户端（固定 fixture / mock）。带 `network` 标记的 live 用例默认跳过。
+测试覆盖 CLI、auth、paper/contrib/config、parser 的 fixture/mock，以及版本来源和
+发布门禁。普通测试禁止意外外网 DNS/连接（允许本机 loopback fixture），默认排除
+`network` 和 `e2e`。网络测试须显式 `uv run --no-sync python -m pytest -m network`；
+生产集成测试另行授权，不将个人 PAT、真实配置或生产目录带入默认测试。
+安装工具/依赖可以联网，**离线测试不等于离线安装**。Ruff 的错误检查基线在本仓显式
+固定为 E4/E7/E9/F，不附带全仓格式化或类型写法迁移。
+
+`[project].version` 是唯一版本来源，运行时只读 `importlib.metadata.version("qatlas-cli")`。
+源码 checkout 也必须先 `uv sync` 安装；没有 metadata 时明确报错，不猜测源码版本。
+本仓没有也不新增 `VERSION`。测试比较项目、锁文件、metadata 和 `__version__`。
+
+需要本地检查 wheel/sdist 时，保持 Hatchling 后端并安装锁内构建工具：
+
+```bash
+uv sync --locked --extra dev --group build
+uv build --no-build-isolation --python .venv/bin/python
+```
+
+不临时 `pip install build/twine`；显式关闭构建隔离，让后端依赖使用 `uv.lock` 中的
+build group，而不是误以为普通 `uv build` 自动锁住隔离环境。构建产物在 `dist/`，不提交。
+
+## 版本管理与发布
+
+Commitizen 的工具依赖已锁定，使用 uv provider，保留 `major_version_zero = true`。
+在干净、已同步的 master 上可先预览：
+
+```bash
+uv run --extra dev cz bump --dry-run
+```
+
+**只有获得发版授权后**才执行 `uv run --extra dev cz bump`，审核版本、锁文件和
+CHANGELOG 的变更，再单独授权推送默认分支和 annotated tag。bump 前置 hooks 会跑
+Ruff 和默认 pytest；hook 失败可能留下修改过的文件却没有 commit/tag，先检查差异，
+不要盲目重跑。不要执行会重生成手写历史的裸 `cz changelog`。新版本说明保持
+`## vX.Y.Z (YYYY-MM-DD)` 格式，破坏性变更写清迁移要求。
+
+`.github/workflows/release.yml` 的流程为：
+
+1. master push/PR、tag 和手动运行均执行锁内 lint/test；管理员需将 `test` 设为分支保护必需检查。
+2. 仅 tag 在测试通过后发布；手动选择分支只测试，不发布。
+3. 校验 canonical PEP 440、tag/项目/锁文件及可选 VERSION 一致、精确且唯一的非空 CHANGELOG 段。
+4. 查询 PyPI，已经记录该版本则在构建前停止；异常响应、网络或鉴权错误不当作“版本不存在”。
+5. 一次构建 wheel/sdist，先保存 Actions artifact **release-dist**（保留 90 天），再上传 PyPI。
+6. 独立的 GitHub Release job 下载**同一批**产物，添加发布说明和附件，不再次构建。
+
+PyPI 保持 OIDC Trusted Publishing，不使用静态 PyPI token。PyPI publisher 应匹配
+owner `IAI-USTC-Quantum`、repo `qatlas-cli`、workflow `release.yml`、environment `pypi`；
+这些远端设置需管理员核验。GitHub Release job 单独获得 `contents: write`，不需要 PyPI 身份。
+
+### 部分失败的恢复
+
+- PyPI 本身禁止覆盖已有文件；关闭 `skip-existing` 是选择让重复上传显式失败，**不是**靠它防覆盖。
+- 只要任一发行文件上传成功，就不要重建同版本或重跑整个发布 job。取回原 run 的
+  **Actions → Artifacts → release-dist**，先核对 PyPI/GitHub 已存在文件及 SHA256，只补缺失上传。
+- 若仅 GitHub Release job 失败，可只重跑该失败 job：它只下载原包，不重新构建/发布 PyPI；
+  `overwrite_files: false` 不覆盖已有附件。已存在附件仍应核对其 SHA256。
+- artifact 过期/丢失无法取回原包时停止恢复并发新版本，不猜测、移动 tag 或覆盖已有产物。
+  本模板不自动完成 PyPI 的部分文件恢复；不要用“Re-run all jobs”代替恢复核对。
+- 两个平台不是原子事务，GitHub Release 失败不会撤回 PyPI 包。旧 tag 指向旧 workflow，
+  新门禁不追溯修改旧 run；本次治理不重发 `v0.34.0`，不构成 push、发版或部署授权。

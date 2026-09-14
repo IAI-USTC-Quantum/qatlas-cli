@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ipaddress
 import os
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -78,6 +80,47 @@ def isolate_project_env(request, monkeypatch):
     _clear_config_env()
     os.environ["QATLAS_SKIP_DOTENV"] = "1"
     os.environ["QUANTUMATLAS_SKIP_DOTENV"] = "1"
+
+
+@pytest.fixture(autouse=True)
+def block_accidental_external_network(request, monkeypatch):
+    """Ordinary tests may use mocks/loopback, never external DNS or connections."""
+    if request.node.get_closest_marker("network") or request.node.get_closest_marker("e2e"):
+        return
+
+    def require_loopback(host):
+        if host in (None, "localhost", b"localhost"):
+            return
+        if isinstance(host, bytes):
+            host = host.decode("ascii")
+        try:
+            if ipaddress.ip_address(host).is_loopback:
+                return
+        except ValueError:
+            pass
+        raise RuntimeError("External network is disabled in ordinary tests; mock it or opt in with a network marker")
+
+    original_getaddrinfo = socket.getaddrinfo
+    original_connect = socket.socket.connect
+    original_connect_ex = socket.socket.connect_ex
+
+    def getaddrinfo(host, *args, **kwargs):
+        require_loopback(host)
+        return original_getaddrinfo(host, *args, **kwargs)
+
+    def connect(sock, address):
+        if sock.family in (socket.AF_INET, socket.AF_INET6):
+            require_loopback(address[0])
+        return original_connect(sock, address)
+
+    def connect_ex(sock, address):
+        if sock.family in (socket.AF_INET, socket.AF_INET6):
+            require_loopback(address[0])
+        return original_connect_ex(sock, address)
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(socket.socket, "connect", connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", connect_ex)
 
 
 @pytest.fixture

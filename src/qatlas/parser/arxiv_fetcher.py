@@ -4,7 +4,6 @@ ArXiv Paper Fetcher
 Downloads papers from arXiv by ID.
 """
 
-import os
 import re
 from pathlib import Path
 from typing import Optional, Tuple

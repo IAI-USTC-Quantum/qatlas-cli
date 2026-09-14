@@ -17,6 +17,7 @@ Exit-code conventions for plugin commands (mirroring the core CLI):
 
 from __future__ import annotations
 
+import sys
 import time
 from typing import Any, Callable
 

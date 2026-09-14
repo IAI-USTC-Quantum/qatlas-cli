@@ -15,7 +15,6 @@ Options:
 
 import sys
 import argparse
-from pathlib import Path
 
 
 def main():
@@ -56,8 +55,8 @@ def main():
 
     args = parser.parse_args()
 
-    print(f"🔬 QuantumAtlas Paper Parser")
-    print(f"=" * 50)
+    print("🔬 QuantumAtlas Paper Parser")
+    print("=" * 50)
 
     # Step 1: Fetch from arXiv
     print(f"\n📥 Fetching paper: {args.arxiv_id}")
@@ -92,7 +91,7 @@ def main():
             file=sys.stderr,
         )
 
-    print(f"\n✨ Done!")
+    print("\n✨ Done!")
 
 
 if __name__ == "__main__":

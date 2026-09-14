@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
-
 import pytest
 import requests
 
@@ -232,6 +230,24 @@ def test_server_request_without_token_omits_auth_header(monkeypatch):
     monkeypatch.setattr(requests, "request", fake_request)
     pluginsupport.server_request(_ctx(token=""), "GET", "api/papers")
     assert "Authorization" not in captured["headers"]
+
+
+def test_insecure_request_warns_once_and_still_sends_request(monkeypatch, capsys):
+    verifications = []
+    monkeypatch.setattr(pluginsupport, "_WARNED_INSECURE", False)
+    monkeypatch.setattr(requests.packages.urllib3, "disable_warnings", lambda **kwargs: None)
+
+    def fake_request(method, url, **kwargs):
+        verifications.append(kwargs["verify"])
+        response = requests.Response()
+        response.status_code = 200
+        return response
+
+    monkeypatch.setattr(requests, "request", fake_request)
+    for _ in range(2):
+        assert pluginsupport.server_request(_ctx(insecure=True), "GET", "/api/health").ok
+    assert verifications == [False, False]
+    assert capsys.readouterr().err.count("TLS certificate verification is disabled") == 1
 
 
 def test_server_request_requires_configured_server():

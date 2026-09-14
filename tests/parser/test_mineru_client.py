@@ -8,7 +8,7 @@ retry/quota handling looks the same regardless of which side hits the API.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict
 from unittest.mock import MagicMock
 
 import pytest
@@ -17,7 +17,6 @@ import requests
 from qatlas.parser.mineru_client import (
     MAX_BATCH_SIZE,
     BatchFile,
-    BatchTaskState,
     MinerUClient,
     MinerUDailyLimitError,
     MinerUError,

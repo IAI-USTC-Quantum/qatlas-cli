@@ -1,9 +1,12 @@
 """Tests for the top-level QuantumAtlas CLI."""
 
+import importlib.metadata
 import runpy
 import sys
 import tomllib
 from pathlib import Path
+
+import pytest
 
 from qatlas import __version__, cli
 
@@ -17,7 +20,34 @@ def test_pyproject_console_script_points_to_top_level_cli():
 def test_runtime_version_matches_project_metadata():
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
-    assert __version__ == pyproject["project"]["version"]
+    assert __version__ == importlib.metadata.version("qatlas-cli") == pyproject["project"]["version"]
+    lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
+    packages = [package for package in lock["package"] if package["name"] == "qatlas-cli"]
+    assert len(packages) == 1
+    assert packages[0]["version"] == __version__
+
+
+def test_runtime_version_uses_installed_metadata_even_in_checkout(monkeypatch):
+    calls = []
+
+    def installed_version(name):
+        calls.append(name)
+        return "1.2.3rc1"
+
+    monkeypatch.setattr(importlib.metadata, "version", installed_version)
+    source = Path(__file__).resolve().parents[1] / "src/qatlas/__init__.py"
+    assert runpy.run_path(str(source))["__version__"] == "1.2.3rc1"
+    assert calls == ["qatlas-cli"]
+
+
+def test_uninstalled_checkout_does_not_invent_a_release_version(monkeypatch):
+    def missing_version(name):
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", missing_version)
+    source = Path(__file__).resolve().parents[1] / "src/qatlas/__init__.py"
+    with pytest.raises(importlib.metadata.PackageNotFoundError):
+        runpy.run_path(str(source))
 
 
 def test_top_level_help(capsys):

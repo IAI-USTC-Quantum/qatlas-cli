@@ -1,65 +1,109 @@
-# Release pipeline: tag push (v*) → build sdist/wheel → PyPI.
-#
-# PyPI publication uses Trusted Publishing via OIDC — no API token is
-# stored anywhere. PyPI verifies the GitHub OIDC token against a
-# per-project Trusted Publisher config that must match:
-#
-#   PyPI project name:    qatlas-cli
-#   Owner:                IAI-USTC-Quantum
-#   Repository name:      qatlas-cli
-#   Workflow filename:    release.yml
-#   Environment name:     pypi
-#
-# One-time setup: configure the publisher at
-#   https://pypi.org/manage/project/qatlas-cli/settings/publishing/
-# and create a GitHub Environment named `pypi` in repo Settings
-# (no secrets / approval reviewers needed — the name itself is the
-# match key for the OIDC token).
-#
-# `skip-existing: true` makes re-runs against an already-published
-# version a no-op.
-
-name: release
+name: CI and release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+    branches: [master]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# Keep the entire two-destination publication serialized for a given tag.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  pypi-publish:
+  test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.30'
+          python-version: '3.11'
+      - run: uv sync --locked --extra dev
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync python -m pytest
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Preserve the existing PyPI Trusted Publisher match (repo/workflow/environment).
+    # No static PyPI token. The GitHub Release job does not need this identity.
     environment:
       name: pypi
       url: https://pypi.org/p/qatlas-cli/
     permissions:
-      contents: read  # checkout the tagged ref
-      id-token: write # required for OIDC trusted publishing
-
+      contents: read
+      id-token: write
+    outputs:
+      prerelease: ${{ steps.meta.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-
-      - name: Verify tag matches pyproject version
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          PYPROJECT_VERSION="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
-          if [ "$TAG" != "$PYPROJECT_VERSION" ]; then
-            echo "tag v$TAG does not match pyproject version $PYPROJECT_VERSION" >&2
-            exit 1
-          fi
-
-      - name: Build Python distributions
-        run: |
-          python -m pip install build
-          python -m build
-
-      - name: Publish to PyPI
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.30'
+          python-version: '3.11'
+      - run: uv sync --locked --extra dev --group build
+      - name: Validate version and exact changelog section
+        id: meta
+        run: uv run --no-sync python scripts/release_metadata.py --tag "$GITHUB_REF_NAME"
+      - name: Refuse to rebuild a version already recorded by PyPI
+        run: uv run --no-sync python scripts/pypi_preflight.py
+      # Hatchling and its dependencies come from the build group in uv.lock.
+      - name: Build wheel and sdist once
+        run: uv build --no-build-isolation --python .venv/bin/python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Publish the saved distributions to PyPI via OIDC
         uses: pypa/gh-action-pypi-publish@release/v1
+        # No skip-existing: duplicate uploads require explicit recovery, not
+        # another build. PyPI itself also rejects overwriting existing files.
+
+  github-release:
+    if: github.ref_type == 'tag'
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
         with:
-          # Silent no-op on re-runs against already-published versions.
-          skip-existing: true
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.30'
+          python-version: '3.11'
+      - run: uv sync --locked --extra dev
+      - name: Extract release notes from the same tag
+        run: uv run --no-sync python scripts/release_metadata.py --tag "$GITHUB_REF_NAME"
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-dist
+          path: dist/
+      # A failed GitHub-only job may be retried without rebuilding/reuploading PyPI.
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          body_path: build/RELEASE_NOTES.md
+          generate_release_notes: true
+          prerelease: ${{ needs.release.outputs.prerelease == 'true' }}
+          files: dist/*
+          overwrite_files: false
+          fail_on_unmatched_files: true

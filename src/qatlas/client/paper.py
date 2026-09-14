@@ -54,7 +54,7 @@ import argparse
 import json
 import sys
 import time
-from typing import Any, Iterable
+from typing import Any
 
 import requests
 

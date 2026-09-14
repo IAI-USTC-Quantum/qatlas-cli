@@ -24,7 +24,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from qatlas import config_yaml
 from qatlas.config import ServerConfig
