@@ -1,17 +1,10 @@
 # Changelog
 
-## Unreleased
+## v0.34.1rc1 (2026-09-14)
 
 ### Fix
 
-- 运行时版本统一读取发行包 metadata，并校验项目版本、锁文件和运行时一致。
-- 修复插件 HTTP 层在 `--insecure` 首次告警时因缺少 `sys` 导入而崩溃；补充离线回归测试。
-
-### CI
-
-- 补齐锁内 Commitizen/Ruff/packaging、bump hooks 和默认分支/tag 的离线测试门禁。
-- 锁内构建一次 wheel/sdist，保留原始 artifact，以 OIDC 发布 PyPI 后再附到 GitHub Release；新增精确版本/日志检查及防重复构建检查。
-- 默认测试排除网络/生产集成用例并阻止意外外网访问。
+- **ci**: gate CLI releases with locked tooling and version checks
 
 ## v0.34.0 (2026-09-12)
 
