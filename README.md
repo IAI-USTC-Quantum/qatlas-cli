@@ -39,3 +39,7 @@ Sphinx 暂固定 8.2.3，以避开 9.1.0 已确认的中文搜索回归；不对
 ```bash
 uv pip compile --no-config --python-version 3.12 --generate-hashes docs/requirements.in -o docs/requirements.txt
 ```
+
+## 开发与发版
+
+开发、测试、兼容协议与完整发版步骤见 [项目概览](docs/overview.md)。版本由锁定的 Commitizen（`uv` provider）从 `pyproject.toml` 写入 PEP 440 号（如 `0.34.1rc1`）：先 `cz bump --dry-run`，授权后再 bump 并推送 annotated tag，CI 发 PyPI 与 GitHub Release。本仓不用 GoReleaser；服务端发版在 [QuantumAtlas](https://github.com/IAI-USTC-Quantum/QuantumAtlas)。
