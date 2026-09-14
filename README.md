@@ -2,17 +2,17 @@
 
 > QuantumAtlas 的 `qatlas` 命令行客户端：面向用户侧的论文获取、贡献上传、
 > 本地解析等工作流，通过 HTTP 与服务端 qatlasd 交互。本仓库是主仓
-> QuantumAtlas 拆出的独立私有仓库，只保留客户端与本地工具，不含服务端代码。
+> QuantumAtlas 拆出的独立客户端仓库，只保留客户端与本地工具，不含服务端代码。
 
 所有服务端通信都是 `requests` 直发的 HTTP 调用，无重量级 SDK 依赖。
 
 ## 安装
 
-> **安装方式变更**：本包拆分自主仓的 `quantum-atlas` Python 包（0.21.0a3 起
-> CLI 不再随主包发布）。PyPI 包名由 `quantum-atlas` 改为 **`qatlas-cli`**，
-> 版本号从 0.21.0a3 延续（首个独立发布为 0.22.0）。之前用
-> `uv tool install quantum-atlas` 安装的用户，改用下面的命令即可，
-> 已有配置（`~/.config/qatlas/config.yaml`、PAT 等）不受影响。
+> **旧包迁移**：CLI 已拆分为独立的 PyPI 包 **`qatlas-cli`**，不再随
+> 主仓的 `quantum-atlas` 包发布。此前通过 uv tool 安装旧工具的用户，应先运行
+> `uv tool uninstall quantum-atlas`，再安装下面的新包，避免旧命令入口冲突。
+> 已有用户配置（`~/.config/qatlas/config.yaml`、PAT 等）保留；旧包中的 Python
+> 帮助库不属于 CLI 的等价替代范围。
 
 从 PyPI 安装为全局 CLI 工具（推荐，与拆分前 `quantum-atlas` 的安装方式一致）：
 
@@ -120,8 +120,8 @@ qatlas-cli 与服务端 qatlasd **各自独立演进版本号**，兼容协议�
 - 响应无版本头或版本无法解析：跳过协商。
 
 **现有限制**：比较发生在业务响应收到之后；即使 CLI 报 exit code 4，写请求也可能
-已经执行。这不是业务调用前的兼容握手，也不能用来保证写操作未发生。本次版本与
-发布流程治理不改变兼容策略；前置握手需另行定义跨仓 API 和迁移方案。
+已经执行。这不是业务调用前的兼容握手，也不能用来保证写操作未发生；
+前置握手需另行定义跨仓 API 和迁移方案。
 
 完整策略见主仓文档：
 [QuantumAtlas 版本与兼容策略](https://github.com/IAI-USTC-Quantum/QuantumAtlas/blob/main/docsite/dev/versioning.rst)。
@@ -202,4 +202,18 @@ owner `IAI-USTC-Quantum`、repo `qatlas-cli`、workflow `release.yml`、environm
 - artifact 过期/丢失无法取回原包时停止恢复并发新版本，不猜测、移动 tag 或覆盖已有产物。
   本模板不自动完成 PyPI 的部分文件恢复；不要用“Re-run all jobs”代替恢复核对。
 - 两个平台不是原子事务，GitHub Release 失败不会撤回 PyPI 包。旧 tag 指向旧 workflow，
-  新门禁不追溯修改旧 run；本次治理不重发 `v0.34.0`，不构成 push、发版或部署授权。
+  新门禁不追溯修改旧 run；不要通过重跑旧版本来验证新流程。发版测试也必须使用
+  经确认、尚未发行的新版本，不移动或覆盖旧 tag。发布成功不意味着获准部署生产。
+
+### 预发布验证
+
+预发布同样是真实发行：PyPI 会保存包，GitHub 会创建标记为 prerelease 的 Release。
+在默认分支 CI 通过、版本号获得确认后，可用 Commitizen 的 `--prerelease rc`
+和 `--prerelease-offset 1` 创建 RC；先加 `--dry-run` 检查结果，再执行实际 bump。
+例如 patch 级 RC 使用 `cz bump --increment PATCH --prerelease rc --prerelease-offset 1`。
+推送时只推本次明确的分支和 tag，不用旧版本测试，也不把 RC 当作正式稳定版。
+
+验证发行后，从 PyPI 下载该精确版本并在隔离环境安装，核对包 metadata、
+`qatlas --version`，再比较 PyPI 文件与 GitHub Release 同名附件的 SHA256。
+需要安装 RC 时显式指定 `qatlas-cli==<已发布的完整RC版本>`；不要依赖不带版本的
+`uv tool upgrade qatlas-cli` 自动选择预发布。

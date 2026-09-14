@@ -11,7 +11,7 @@
 
 - 补齐锁内 Commitizen/Ruff/packaging、bump hooks 和默认分支/tag 的离线测试门禁。
 - 锁内构建一次 wheel/sdist，保留原始 artifact，以 OIDC 发布 PyPI 后再附到 GitHub Release；新增精确版本/日志检查及防重复构建检查。
-- 默认测试排除网络/生产集成用例并阻止意外外网访问；本次不改变版本号、不重发历史版本。
+- 默认测试排除网络/生产集成用例并阻止意外外网访问。
 
 ## v0.34.0 (2026-09-12)
 
