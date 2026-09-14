@@ -1,0 +1,48 @@
+name: Documentation
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - README.md
+      - 'docs/**'
+      - .github/workflows/docs.yml
+  pull_request:
+    branches: [master]
+    paths:
+      - README.md
+      - 'docs/**'
+      - .github/workflows/docs.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.30'
+          python-version: '3.12'
+          enable-cache: false
+      - name: Install only hash-locked documentation dependencies
+        run: |
+          uv venv --no-config --python 3.12 .venv-docs
+          uv pip sync --no-config --python .venv-docs/bin/python --require-hashes docs/requirements.txt
+      - name: Build documentation strictly
+        run: |
+          source .venv-docs/bin/activate
+          sphinx-build -W --keep-going -n -b html docs build/docs
+      - name: Check project pages and Chinese search index
+        run: .venv-docs/bin/python docs/check_build.py build/docs
+      # Build and validate only: no hosting, upload, release or deployment.
