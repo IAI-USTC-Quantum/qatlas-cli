@@ -35,14 +35,6 @@ jobs:
           version: '0.11.30'
           python-version: '3.12'
           enable-cache: false
-      - name: Install only hash-locked documentation dependencies
-        run: |
-          uv venv --no-config --python 3.12 .venv-docs
-          uv pip sync --no-config --python .venv-docs/bin/python --require-hashes docs/requirements.txt
-      - name: Build documentation strictly
-        run: |
-          source .venv-docs/bin/activate
-          sphinx-build -W --keep-going -n -b html docs build/docs
-      - name: Check project pages and Chinese search index
-        run: .venv-docs/bin/python docs/check_build.py build/docs
+      - name: Build and verify documentation
+        run: uv run --locked --script docs/build.py
       # Build and validate only: no hosting, upload, release or deployment.

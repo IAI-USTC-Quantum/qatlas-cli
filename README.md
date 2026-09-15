@@ -22,22 +22,18 @@ qatlas --help
 从仓库根目录执行（Python 3.12、uv 0.11.30）：
 
 ```bash
-uv venv --python 3.12 .venv-docs
-uv pip sync --no-config --python .venv-docs/bin/python --require-hashes docs/requirements.txt
-source .venv-docs/bin/activate
-sphinx-build -W --keep-going -n -b html docs build/docs
-python docs/check_build.py build/docs
+uv run --locked --script docs/build.py
 ```
 
 产物为 `build/docs/index.html`，只在本地生成，不自动发布。
 独立的 `.github/workflows/docs.yml` 对默认分支 push/PR 的 README、docs 和该 workflow 变更执行同样的严格构建与校验，也支持手动运行；不发布网站、镜像或应用版本。
 
-文档依赖在 `docs/requirements.in` 指定，`docs/requirements.txt` 锁定全部依赖的版本和哈希。
+文档依赖写在 `docs/build.py` 的 PEP 723 头，锁为 `docs/build.py.lock`。
 Sphinx 暂固定 8.2.3，以避开 9.1.0 已确认的中文搜索回归；不对搜索实现打补丁。
-有意更新文档依赖时，用同一 uv 版本重新生成锁并完整验证：
+有意更新文档依赖时，改脚本头并用同一 uv 版本重新锁：
 
 ```bash
-uv pip compile --no-config --python-version 3.12 --generate-hashes docs/requirements.in -o docs/requirements.txt
+uv lock --script docs/build.py
 ```
 
 ## 开发与发版

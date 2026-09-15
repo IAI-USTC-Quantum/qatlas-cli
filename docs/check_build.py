@@ -1,7 +1,7 @@
 """Validate native Sphinx HTML output without importing the application.
 
 Run after sphinx-build, never as a Sphinx extension or build hook.
-BeautifulSoup is part of Furo's hash-locked documentation dependencies.
+BeautifulSoup is part of Furo's documentation dependencies.
 """
 
 import argparse
