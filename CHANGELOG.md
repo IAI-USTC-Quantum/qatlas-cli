@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.37.0rc1 (2026-09-29)
+
+### Feat
+
+- **cli**: add qatlas comments command family (list/show/create/reply/status/edit)
+- **cli**: add paper pdf/parse-list/parse-json/block-list/block-get/block-image
+- **client**: add content-addressed cache for immutable originals
+- **client**: add blockapi shared client layer for block-comments endpoints
+
+### Fix
+
+- **client**: reconcile list shapes with live API and add create --reason
+- **cli**: drop phantom 'paper sources' reference from ambiguity error
+- **client**: check server compatibility before business writes
+
 ## v0.34.1rc1 (2026-09-14)
 
 ### Fix
