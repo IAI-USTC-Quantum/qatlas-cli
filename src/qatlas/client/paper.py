@@ -1007,18 +1007,31 @@ Usage:
   qatlas paper mineru-lease ID_OR_DOI [--ttl-seconds N]
   qatlas paper mineru-lease release ID_OR_DOI CLAIM_ID
 
+  Block-level comments originals (new; needs a server with Q1/Q2):
+  qatlas paper pdf         ID [--source S|--version vN] [-o FILE]
+  qatlas paper parse-list  ID [--json]
+  qatlas paper parse-json  ID REVISION [-o FILE]
+  qatlas paper block-list  ID REVISION [--page-idx N] [--cursor C] [--json]
+  qatlas paper block-get   ID REVISION PAGE_IDX BLOCK_INDEX [--json]
+  qatlas paper block-image ID REVISION PAGE_IDX BLOCK_INDEX [-o FILE]
+  (see `qatlas paper pdf --help` etc.; discussions live in `qatlas comments`)
+
 ID forms accepted:
   - Versioned arxiv id          0811.3171v3 / quant-ph/9508027v2
   - Bare arxiv id (no version)  0811.3171  (server adds latest vN)
   - Bare old-style (no category) 9508027   (server adds quant-ph/)
   - DOI                          10.1103/PhysRevLett.103.150502
+  - Canonical qa_ paper id       qa_… (required family for the
+                                 pdf/parse-*/block-* commands' cache)
 
-PDF delivery is disabled server-side (GET .../pdf answers 410 Gone);
-use `paper get markdown` (and `paper get images` for the figures zip).
+The legacy markdown-images endpoints deliver via ``paper get`` above; the
+new ``paper pdf`` path serves the immutable source PDF from the
+block-comments originals API (sha256-verified, content-addressed cache
+under the configurable cache_dir).
 
 Server-side endpoints must be enabled via ``paper_access.enabled: true``
-in the server's config.yaml. Defaults applied by the server are surfaced
-on stderr (use --quiet-notes to suppress).
+in the server's config.yaml (legacy part). Defaults applied by the server
+are surfaced on stderr (use --quiet-notes to suppress).
 
 Use 'qatlas paper <subcommand> --help' for full options.
 """
@@ -1067,6 +1080,19 @@ def main(argv: list[str] | None = None) -> int:
             parser = build_release_mineru_lease_parser(prog=f"{prog_base} release")
         else:
             parser = build_mineru_lease_parser(prog=prog_base)
+    elif subcommand in {
+        "pdf",
+        "parse-list",
+        "parse-json",
+        "block-list",
+        "block-get",
+        "block-image",
+    }:
+        # Block-comments originals (plan §12.4): implemented in a sibling
+        # module to keep this one focused on the legacy paper-access API.
+        from qatlas.client import blocks as _blocks
+
+        return _blocks.main([subcommand, *argv])
     else:
         print(f"unknown paper subcommand: {subcommand!r}", file=sys.stderr)
         _print_top_help()
