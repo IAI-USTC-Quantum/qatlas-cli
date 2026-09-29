@@ -202,7 +202,7 @@ def _pick_source(
         return items[0]
     raise blockapi.ApiError(
         "multiple sources and no unambiguous current pointer — pick one with "
-        "`--source SOURCE_ID` (see `qatlas paper sources` output); available: "
+        "--source SOURCE_ID; available: "
         + ", ".join(
             f"{i.get('source_id')} (origin={i.get('origin')})" for i in items
         ),
