@@ -5,7 +5,8 @@ Commands::
 
     qatlas comments list   PAPER [--scope …] [--type …] [--status …]
                                   [--page-idx N] [--block-index N]
-                                  [--cursor C] [--per-page N] [--json]
+                                  [--cursor C] [--since CURSOR]
+                                  [--per-page N] [--json]
     qatlas comments show   DISCUSSION_ID [--cursor C] [--per-page N] [--json]
     qatlas comments create PAPER REVISION PAGE_IDX BLOCK_INDEX
                                   [BODY | --body-file FILE] [--type T]
@@ -36,6 +37,11 @@ Contract highlights (plan §12.2 / §9):
   matching ``[a-z0-9_:-]+`` (≤64 chars). A discussion's status
   (``pending``/``confirmed``/``retracted``, optional) is orthogonal to
   its type (plan §12.1).
+* ``list --since CURSOR`` is pull-style incremental sync: the server
+  returns only discussions updated past CURSOR and reports a top-level
+  ``since`` to echo back next time. That cursor only advances on the
+  last page of a window — keep paging with --cursor until
+  ``next_cursor`` is gone before adopting the new ``since``.
 * System PATs are read-only for comments — writes answer 403 (exit 5).
 
 Output: ``--json`` prints the complete machine response; the default
@@ -145,6 +151,8 @@ def cmd_list(args: argparse.Namespace) -> int:
         params["block_index"] = args.block_index
     if args.cursor:
         params["cursor"] = args.cursor
+    if args.since:
+        params["since"] = args.since
     path = (
         f"/api/papers/{blockapi.encode_path_segment(args.paper_id)}/discussions"
     )
@@ -167,6 +175,9 @@ def cmd_list(args: argparse.Namespace) -> int:
     if cursor:
         print(f"next_cursor: {cursor}")
         _stderr("more results exist — pass --cursor")
+    since = body.get("since")
+    if since:
+        print(f"since: {since}")
     return 0
 
 
@@ -452,6 +463,14 @@ def build_list_parser() -> argparse.ArgumentParser:
     p.add_argument("--page-idx", type=int, default=None, help="filter: anchor page")
     p.add_argument("--block-index", type=int, default=None, help="filter: anchor block")
     p.add_argument("--cursor", default=None, help="cursor from a previous page")
+    p.add_argument(
+        "--since",
+        default=None,
+        metavar="CURSOR",
+        help="incremental sync: return only discussions updated after "
+        "CURSOR (<unixmillis>-<discussion_id>, echo back the top-level "
+        "'since' of the previous response); composes with all filters",
+    )
     p.add_argument("--per-page", type=int, default=None)
     p.add_argument("--json", action="store_true", help="print the raw server response")
     add_common_http_args(p)
@@ -598,7 +617,8 @@ Usage:
   qatlas comments list   PAPER [--scope public|lean] [--type T]
                                 [--status pending|confirmed|retracted]
                                 [--page-idx N] [--block-index N]
-                                [--cursor C] [--per-page N] [--json]
+                                [--cursor C] [--since CURSOR]
+                                [--per-page N] [--json]
   qatlas comments show   DISCUSSION_ID [--cursor C] [--per-page N] [--json]
   qatlas comments create PAPER REVISION PAGE_IDX BLOCK_INDEX
                                 [BODY | --body-file FILE] [--type T]

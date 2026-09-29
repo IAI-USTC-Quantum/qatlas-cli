@@ -72,6 +72,7 @@ def test_list_passes_filters_and_cursor(monkeypatch, capsys):
         assert q["page_idx"] == ["0"]
         assert q["block_index"] == ["1"]
         assert q["cursor"] == ["c1"]
+        assert q["since"] == ["1790669694124-cd_01m3p3p95"]
         return make_response(
             200,
             json_body={"items": [DISCUSSION_BODY], "next_cursor": "c2"},
@@ -88,6 +89,7 @@ def test_list_passes_filters_and_cursor(monkeypatch, capsys):
             "--page-idx", "0",
             "--block-index", "1",
             "--cursor", "c1",
+            "--since", "1790669694124-cd_01m3p3p95",
         ],
     )
     assert code == 0
@@ -95,6 +97,27 @@ def test_list_passes_filters_and_cursor(monkeypatch, capsys):
     assert DISCUSSION in out
     assert "sqrt range looks wrong" in out
     assert "c2" in out
+
+
+def test_list_renders_since_cursor(monkeypatch, capsys):
+    """The response's top-level since (next poll's --since) is rendered."""
+    transport = MockTransport()
+    since = "1790669694124-cd_01m3p3p95"
+
+    @transport.route("GET", f"/api/papers/{PAPER}/discussions")
+    def _list(req):
+        q = MockTransport.query_of(req)
+        assert q["since"] == [since]
+        return make_response(
+            200,
+            json_body={"items": [], "next_cursor": None, "since": since},
+        )
+
+    code = _run(monkeypatch, transport, ["list", PAPER, "--since", since])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "0 discussion(s)" in out
+    assert since in out
 
 
 def test_list_json_prints_full_response(monkeypatch, capsys):
