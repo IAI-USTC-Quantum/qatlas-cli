@@ -125,18 +125,25 @@ def fetch_parses(args: argparse.Namespace, base_url: str) -> dict[str, Any]:
     return blockapi.get_json(args, path, what="parse list", base_url=base_url)
 
 
-def _source_items(body: dict[str, Any]) -> list[dict[str, Any]]:
+def _list_items(body: dict[str, Any], key: str, what: str) -> list[dict[str, Any]]:
+    """Defensive list extraction: the live API wraps lists in a named
+    array (``sources`` / ``parses`` / ``blocks`` / ``items`` are all
+    accepted); mock fixtures may use either shape."""
     items = body.get("items")
-    if items is None and isinstance(body.get("sources"), list):
-        items = body["sources"]
+    if items is None and isinstance(body.get(key), list):
+        items = body[key]
     if not isinstance(items, list):
         raise blockapi.ApiError(
-            "sources list: unexpected response shape (no items array)",
+            f"{what}: unexpected response shape (no {key} array)",
             kind="bad_content",
             exit_code=blockapi.EXIT_TRANSPORT,
             body=body,
         )
     return [it for it in items if isinstance(it, dict)]
+
+
+def _source_items(body: dict[str, Any]) -> list[dict[str, Any]]:
+    return _list_items(body, "sources", "sources list")
 
 
 def _pick_source(
@@ -275,11 +282,7 @@ def cmd_parse_list(args: argparse.Namespace) -> int:
     if args.json:
         blockapi_json_print(body)
         return 0
-    items = [
-        it
-        for it in (body.get("items") or [])
-        if isinstance(it, dict)
-    ]
+    items = _list_items(body, "parses", "parse list")
     if not items:
         _stderr("no parse revisions recorded for this paper")
         return 0
@@ -310,7 +313,7 @@ def cmd_parse_json(args: argparse.Namespace) -> int:
     """Download the original parse JSON bytes (hash-verified, cached)."""
     base_url = base_url_from_args(args)
     parses = fetch_parses(args, base_url)
-    items = [it for it in (parses.get("items") or []) if isinstance(it, dict)]
+    items = _list_items(parses, "parses", "parse list")
     match = None
     for it in items:
         if str(it.get("revision_id") or it.get("revision")) == args.revision:
@@ -382,7 +385,7 @@ def cmd_block_list(args: argparse.Namespace) -> int:
     if args.json:
         blockapi_json_print(body)
         return 0
-    items = [it for it in (body.get("items") or []) if isinstance(it, dict)]
+    items = _list_items(body, "blocks", "block list")
     print(f"{len(items)} block(s) on this page of results:")
     for it in items:
         idx = it.get("index", it.get("block_index", "?"))

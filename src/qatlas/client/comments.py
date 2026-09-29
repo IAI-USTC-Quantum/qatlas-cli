@@ -154,7 +154,7 @@ def cmd_list(args: argparse.Namespace) -> int:
     if args.json:
         _json_print(body)
         return 0
-    items = [it for it in (body.get("items") or []) if isinstance(it, dict)]
+    items = [it for it in (body.get("items") or body.get("discussions") or []) if isinstance(it, dict)]
     print(f"{len(items)} discussion(s):")
     for it in items:
         status = it.get("status") or "—"
@@ -234,6 +234,12 @@ def _build_create_payload(args: argparse.Namespace) -> dict[str, Any]:
     }
     if args.status:
         payload["status"] = args.status
+        # The server contract requires a reason whenever an initial
+        # status is set (status events are append-only history).
+        reason = getattr(args, "reason", None)
+        if not reason:
+            reason = "created with initial status via qatlas-cli"
+        payload["reason"] = reason
     if args.model:
         payload["model"] = args.model
     return payload
@@ -498,6 +504,12 @@ def build_create_parser() -> argparse.ArgumentParser:
         choices=STATUSES,
         default=None,
         help="optional initial status (omit for a plain note with no status)",
+    )
+    p.add_argument(
+        "--reason",
+        default=None,
+        help="reason recorded with an initial status (server requires one; "
+        "defaults to a generic CLI note)",
     )
     _model_arg(p)
     p.add_argument("--json", action="store_true", help="print the raw server response")
