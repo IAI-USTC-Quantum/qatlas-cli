@@ -74,6 +74,9 @@ _DEFAULT_CONFIG_YAML = """\
 
 # ── Local workspace (dev tooling: qatlas parser) ───────────────────
 # raw_dir: ./raw        # asset cache root
+# cache_dir:            # content-addressed cache for block-comments
+#                       # originals (paper pdf / parse-json); default:
+#                       # ~/.cache/qatlas (OS user cache dir)
 
 # ── MinerU API (qatlas contrib mineru) ─────────────────────────────
 # mineru_api_tokens:        # List of JWTs from https://mineru.net
@@ -152,6 +155,11 @@ class ServerConfig(BaseSettings):
     # ── Local workspace (dev tooling reads these) ────────────────
     raw_dir: str = Field(default="raw")
     data_dir: str = Field(default="data")
+    # Content-addressed cache root for immutable block-comments
+    # originals (paper pdf / parse-json). Relative paths anchor at the
+    # project root like raw_dir; unset → OS user cache dir
+    # (~/.cache/qatlas on Linux). See qatlas.client.blockcache.
+    cache_dir: Optional[str] = Field(default=None)
 
     # ── MinerU (third-party SDK; client-only) ────────────────────
     # Pool of MinerU API tokens. Configure ≥1 to enable MinerU calls;
