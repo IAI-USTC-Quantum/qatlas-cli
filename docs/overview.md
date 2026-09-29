@@ -48,12 +48,15 @@ uv pip install -e .
 ## 命令概览
 
 ```
-qatlas config   # 管理用户级配置文件（~/.config/qatlas/config.yaml）
-qatlas auth     # 管理各 host 的 PAT / session token（login / status / token / logout）
-qatlas paper    # 论文工作流：get markdown/images/metadata、status、mineru-lease，
-                #   目录检索 list / lookup，批量下载 fetch 与进度 jobs
-qatlas contrib  # 贡献者工作流：上传 PDF（contrib pdf）或本地跑 MinerU 再推送（contrib mineru）
-qatlas parser   # 抓取并解析 arXiv 论文（本地工作区命令）
+qatlas config    # 管理用户级配置文件（~/.config/qatlas/config.yaml）
+qatlas auth      # 管理各 host 的 PAT / session token（login / status / token / logout）
+qatlas paper     # 论文工作流：get markdown/images/metadata、status、mineru-lease，
+                 #   目录检索 list / lookup，批量下载 fetch 与进度 jobs；
+                 #   块级评论原件：pdf / parse-list / parse-json /
+                 #   block-list / block-get / block-image
+qatlas comments  # 块级讨论：list / show / create / reply / status / edit
+qatlas contrib   # 贡献者工作流：上传 PDF（contrib pdf）或本地跑 MinerU 再推送（contrib mineru）
+qatlas parser    # 抓取并解析 arXiv 论文（本地工作区命令）
 ```
 
 别名：`papers` → `paper`，`parse` → `parser`。
@@ -71,6 +74,38 @@ qatlas paper get metadata quant-ph/9508027          # 论文元数据（JSON：p
 qatlas contrib pdf quant-ph/9508027v1 --pdf paper.pdf
 qatlas contrib mineru 2501.00010v1
 ```
+
+### 块级评论（paper 原件 / 块 / 讨论）
+
+`qatlas paper pdf|parse-list|parse-json|block-list|block-get|block-image`
+与 `qatlas comments list|show|create|reply|status|edit` 覆盖块级评论闭环的
+客户端侧：读取不可变原件与解析修订、按 page_idx+block_index 定位块、读取与
+发起/回复/改状态/编辑讨论。需要服务端 qatlasd 具备块级评论端点（Q1/Q2）；
+旧服务未实现时 CLI 以退出码 9 明确提示 unsupported。
+
+```bash
+qatlas paper parse-list qa_…                        # 解析修订列表（锚点用 revision id，不用 latest）
+qatlas paper pdf qa_… --version v2 -o paper.pdf     # 源 PDF 原字节（sha256 校验、可缓存、不回退版本）
+qatlas paper block-get qa_… <revision> 4 11 --json  # 单块组合阅读：source+anchor+content+discussions
+qatlas comments create qa_… <revision> 4 11 "依据…" --type transcription_error --status pending
+qatlas comments reply <discussion_id> "对照原图核对结果"
+qatlas comments status <discussion_id> confirmed --reason "已对照原图确认"
+```
+
+要点：
+
+- 写操作自动携带确定性幂等键（SHA-256(method|path|body)），超时后重发同一
+  请求会回放原结果，不会重复发帖；`edit` 自动取当前 revision 做 `If-Match`
+  CAS，过期修订按 409（退出码 6）拒绝。
+- 正文上限 20,000 Unicode 字符（客户端镜像检查，超限退出码 2 并提示拆分）；
+  分页 per_page 默认 20、上限 100，游标翻页。
+- 原件缓存按「服务来源 + qa_ + 固定 sha256」内容寻址，配置项 `cache_dir`
+  （默认 `~/.cache/qatlas`）；下载校验 hash 后原子发布（tmp+rename），并发
+  去重；401 不会用旧缓存伪装成功，token 撤销不删除已合法下载的原件。
+  评论等可变数据不落盘缓存。
+- stdout 只出数据（原字节 / 完整机器 JSON / 人读格式），提示与进度走
+  stderr；结构化退出码：0 成功、1 传输/5xx/坏内容、2 用法、3 未找到、
+  4 未认证、5 无权限、6 冲突/CAS、7 超限、8 限流、9 服务不支持。
 
 `search` 命令由独立插件 qatlas-search 提供（仓库 IAI-USTC-Quantum/qatlas-search），
 `rag` 命令由独立插件 qatlas-rag 提供（仓库 IAI-USTC-Quantum/qatlas-rag），
@@ -128,6 +163,9 @@ qatlas-cli 与服务端 qatlasd **各自独立演进版本号**，兼容协议�
 用户级配置位于 `~/.config/qatlas/config.yaml`（首次运行非 `config` 命令时
 自动创建），顶层 `server_url` / `token` 等字段供各客户端命令读取。环境变量
 `QATLAS_*` 系列可覆盖对应配置；`QATLAS_SKIP_DOTENV=1` 跳过仓库 `.env` 加载。
+`cache_dir` 指定块级评论原件（paper pdf / parse-json）的内容寻址缓存根目录，
+相对路径锚定在项目根（同 `raw_dir`）；未设置时用系统用户缓存目录
+（Linux 默认 `~/.cache/qatlas`）。
 
 ## 开发与测试
 
