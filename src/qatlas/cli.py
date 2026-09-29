@@ -35,7 +35,11 @@ COMMANDS: Mapping[str, Command] = {
     ),
     "paper": Command(
         "qatlas.client.paper",
-        "Paper workflows: get markdown/images/figures/image/metadata, status (single or batch), list, lookup, batch fetch, downloader jobs",
+        "Paper workflows: get markdown/images/figures/image/metadata, status (single or batch), list, lookup, batch fetch, downloader jobs; originals/blocks for block-level comments (pdf, parse-list, parse-json, block-list, block-get, block-image)",
+    ),
+    "comments": Command(
+        "qatlas.client.comments",
+        "Block-level discussions: list, show, create, reply, status, edit",
     ),
     "contrib": Command(
         "qatlas.client.contrib",
@@ -103,6 +107,10 @@ Aliases:
 Examples:
   qatlas paper get markdown quant-ph/9508027 --output paper.md
   qatlas paper get images 10.1103/PhysRevLett.103.150502 -o images.zip
+  qatlas paper pdf qa_… --version v2 -o paper.pdf
+  qatlas paper block-get qa_… <revision> 4 11 --json
+  qatlas comments create qa_… <revision> 4 11 "transcription looks wrong" \\
+      --type transcription_error --status pending
   qatlas contrib pdf quant-ph/9508027v1 --pdf paper.pdf
   qatlas contrib mineru 2501.00010v1
   qatlas contrib mineru --watch
