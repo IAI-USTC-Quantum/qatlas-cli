@@ -52,7 +52,7 @@ qatlas config    # 管理用户级配置文件（~/.config/qatlas/config.yaml）
 qatlas auth      # 管理各 host 的 PAT / session token（login / status / token / logout）
 qatlas paper     # 论文工作流：get markdown/images/metadata、status、mineru-lease，
                  #   目录检索 list / lookup，批量下载 fetch 与进度 jobs；
-                 #   块级评论原件：pdf / parse-list / parse-json /
+                 #   块级评论原件：pdf / source-list / parse-list / parse-json /
                  #   block-list / block-get / block-image
 qatlas comments  # 块级讨论：list / show / create / reply / status / edit
 qatlas contrib   # 贡献者工作流：上传 PDF（contrib pdf）或本地跑 MinerU 再推送（contrib mineru）
@@ -75,9 +75,51 @@ qatlas contrib pdf quant-ph/9508027v1 --pdf paper.pdf
 qatlas contrib mineru 2501.00010v1
 ```
 
+### 从检索到统一身份、正文与贡献
+
+安装 search / match 插件后，研究工作可复用下面的顺序；不需要在客户端启动
+qatlasd、数据库或 MinerU 服务。
+
+```bash
+qatlas search '"variable time amplitude amplification"' --no-agent --json
+qatlas match --arxiv 1010.4458 --json
+qatlas paper get metadata qa_…
+qatlas paper get markdown qa_…             # 默认 stdout；缓存未命中时由服务端抓取/解析
+qatlas paper source-list qa_… --json       # 原始 PDF source、版本来源和完整 hash
+qatlas paper parse-list qa_… --json        # 支持 originals API 的服务返回解析 revision
+qatlas paper parse-json qa_… REVISION --no-cache  # 固定 revision 的 JSON，默认 stdout
+```
+
+- 服务端搜索结果是 `results[].paper_id` 加 `results[].hit`，`paper_id` 是
+  统一 `qa_…` 身份；direct 搜索绕过 qatlasd，不铸造或锚定统一 ID。
+- match 只查已有 registry，未命中退出 `1` 不表示论文不存在；多候选/ambiguous
+  时先用作者、年份和原文身份消歧，不能直接选择第一个候选。
+- `qa_…` 表示论文工作，不固定 arXiv 版本、PDF source 或解析 revision。
+  复现证明要另记录版本，或解析列表中的 source/revision/hash；需要核对原件时
+  用 `paper pdf qa_… --version v2 --no-cache` 或明确 `--source`。省略 pin 不是
+  可复现版本选择；显式 source/version 无命中时不会回退。
+- Markdown 便于阅读，固定 revision 的 JSON 便于保留页码、块和公式来源。
+  解析正文与 PDF 可能有 OCR 差异；关键前提、公式和编号仍需对照原件。
+- `paper get` 使用既有 `papers:read`；缓存未命中可触发服务端下载/转换，并非
+  手工上传。先跟踪已有 LRO/job，不因一次调用超时重复创建任务。
+
+若已在其他来源取得服务缺失的合法 PDF，可用已有贡献命令补缓存：
+
+```bash
+qatlas contrib pdf 1010.4458v2 --pdf paper.pdf --verify strict
+# 或明确 DOI；本地现成 MinerU ZIP 的上传入口限 DOI：
+qatlas contrib mineru 10.1145/2090236.2090261 --zip mineru.zip --verify strict
+```
+
+这两条是写操作，需当前账户具备贡献权限，并由客户端实施写操作版本检查。
+只读获取不需要额外申请贡献权限；上传前核对身份和文件，已有资产不随意
+`--overwrite`。`contrib mineru ID` 的本地转换还需要用户已有的 MinerU 配置；
+通常的远程 Markdown 获取不需要本地 MinerU token。旧服务若缺 originals API，
+对应命令返回 unsupported（退出 `9`），仍可用既有 Markdown 获取路径。
+
 ### 块级评论（paper 原件 / 块 / 讨论）
 
-`qatlas paper pdf|parse-list|parse-json|block-list|block-get|block-image`
+`qatlas paper pdf|source-list|parse-list|parse-json|block-list|block-get|block-image`
 与 `qatlas comments list|show|create|reply|status|edit` 覆盖块级评论闭环的
 客户端侧：读取不可变原件与解析修订、按 page_idx+block_index 定位块、读取与
 发起/回复/改状态/编辑讨论。需要服务端 qatlasd 具备块级评论端点（Q1/Q2）；

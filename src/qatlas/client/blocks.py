@@ -1,4 +1,4 @@
-"""``qatlas paper pdf|parse-list|parse-json|block-list|block-get|block-image``
+"""``qatlas paper pdf|source-list|parse-list|parse-json|block-list|block-get|block-image``
 — originals, parse revisions and block reads for block-level comments
 (plan §12.2 Q1 endpoints, §12.4 command surface).
 
@@ -6,6 +6,7 @@ Commands::
 
     qatlas paper pdf         ID [--source S|--version vN] [-o FILE]
                                     [--no-cache] [--force-refresh]
+    qatlas paper source-list ID [--json]
     qatlas paper parse-list  ID [--json]
     qatlas paper parse-json  ID REVISION [-o FILE] [--no-cache] [--force-refresh]
     qatlas paper block-list  ID REVISION [--page-idx N] [--cursor C]
@@ -276,6 +277,27 @@ def cmd_pdf(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_source_list(args: argparse.Namespace) -> int:
+    """Expose source ids, origins and hashes before selecting immutable bytes."""
+    body = fetch_sources(args, base_url_from_args(args))
+    items = _source_items(body)
+    if args.json:
+        blockapi_json_print(body)
+        return 0
+    if not items:
+        _stderr("no source PDF assets recorded for this paper")
+        return 0
+    print(f"{len(items)} source PDF(s):")
+    for it in items:
+        mark = "→" if it.get("is_current") else "*"
+        print(
+            f"  {mark} {it.get('source_id', '?')}  origin={it.get('origin', '?')}  "
+            f"sha256={it.get('sha256', '?')}  size_bytes={it.get('size_bytes', '?')}"
+        )
+    _stderr("(use --source with paper pdf to pin an exact source)")
+    return 0
+
+
 def cmd_parse_list(args: argparse.Namespace) -> int:
     base_url = base_url_from_args(args)
     body = fetch_parses(args, base_url)
@@ -515,6 +537,21 @@ def build_pdf_parser() -> argparse.ArgumentParser:
     return p
 
 
+def build_source_list_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="qatlas paper source-list",
+        description=(
+            "List a paper's immutable source PDFs (source_id, origin, sha256, "
+            "size_bytes). Use a source id with paper pdf --source."
+        ),
+    )
+    _id_arg(p)
+    p.add_argument("--json", action="store_true", help="print the raw server response")
+    add_common_http_args(p)
+    p.set_defaults(func=cmd_source_list)
+    return p
+
+
 def build_parse_list_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="qatlas paper parse-list",
@@ -614,6 +651,7 @@ def build_block_image_parser() -> argparse.ArgumentParser:
 
 _PARSERS: dict[str, Callable[[], argparse.ArgumentParser]] = {
     "pdf": build_pdf_parser,
+    "source-list": build_source_list_parser,
     "parse-list": build_parse_list_parser,
     "parse-json": build_parse_json_parser,
     "block-list": build_block_list_parser,
@@ -623,12 +661,13 @@ _PARSERS: dict[str, Callable[[], argparse.ArgumentParser]] = {
 
 
 _BLOCK_HELP = """\
-qatlas paper <pdf|parse-list|parse-json|block-list|block-get|block-image> —
+qatlas paper <pdf|source-list|parse-list|parse-json|block-list|block-get|block-image> —
 originals, parse revisions and block reads for block-level comments.
 
 Usage:
   qatlas paper pdf         ID [--source S|--version vN] [-o FILE]
                                   [--no-cache] [--force-refresh]
+  qatlas paper source-list ID [--json]
   qatlas paper parse-list  ID [--json]
   qatlas paper parse-json  ID REVISION [-o FILE] [--no-cache] [--force-refresh]
   qatlas paper block-list  ID REVISION [--page-idx N] [--cursor C]

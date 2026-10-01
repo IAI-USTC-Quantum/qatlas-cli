@@ -474,3 +474,63 @@ def test_paper_main_dispatches_block_subcommands(monkeypatch):
     mount(monkeypatch, transport)
     code = paper_cli.main(["parse-list", PAPER])
     assert code == 0
+
+
+@pytest.mark.parametrize("shape", ["items", "sources"])
+def test_source_list_preserves_all_sources_and_hashes(monkeypatch, capsys, shape):
+    import json
+    transport = MockTransport()
+    body = {shape: SOURCES_BODY["items"], "paper_id": PAPER}
+
+    @transport.route("GET", f"/api/papers/{PAPER}/sources")
+    def _sources(req):
+        return make_response(200, json_body=body)
+
+    assert _run(monkeypatch, transport, ["source-list", PAPER, "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == body
+    assert _run(monkeypatch, transport, ["source-list", PAPER]) == 0
+    captured = capsys.readouterr()
+    assert "src_v2" in captured.out and "src_v3" in captured.out
+    assert "arxiv:v2" in captured.out and "arxiv:v3" in captured.out
+    assert PDF_SHA in captured.out
+    assert "--source" in captured.err
+
+
+def test_source_list_dispatches_through_paper_cli(monkeypatch, capsys):
+    from qatlas.client import paper
+    import json
+    transport = MockTransport()
+
+    @transport.route("GET", f"/api/papers/{PAPER}/sources")
+    def _sources(req):
+        return make_response(200, json_body=SOURCES_BODY)
+
+    mount(monkeypatch, transport)
+    assert paper.main(["source-list", PAPER, "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == SOURCES_BODY
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+def test_source_list_bad_shape_is_failure(monkeypatch, capsys, json_output):
+    transport = MockTransport()
+
+    @transport.route("GET", f"/api/papers/{PAPER}/sources")
+    def _sources(req):
+        return make_response(200, json_body={"sources": "not an array"})
+
+    flags = ["--json"] if json_output else []
+    assert _run(monkeypatch, transport, ["source-list", PAPER, *flags]) == 1
+    assert capsys.readouterr().out == ""
+
+
+def test_source_list_empty_registry_is_success(monkeypatch, capsys):
+    transport = MockTransport()
+
+    @transport.route("GET", f"/api/papers/{PAPER}/sources")
+    def _sources(req):
+        return make_response(200, json_body={"sources": []})
+
+    assert _run(monkeypatch, transport, ["source-list", PAPER]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "no source PDF" in captured.err
