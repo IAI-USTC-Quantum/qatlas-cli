@@ -24,8 +24,10 @@ available (no ``paper_access.enabled`` gate, no LRO, no side effects).
 It prints the JSON response body verbatim; the registry does not store
 abstracts, so none is included.
 
-PDF delivery is disabled server-side (``GET .../pdf`` answers 410
-Gone), so there is deliberately no ``paper get pdf`` subcommand.
+The legacy ``GET .../pdf`` delivery endpoint is disabled (410 Gone),
+so there is no ``paper get pdf`` subcommand. On servers supporting the
+originals API, use ``paper pdf`` for SHA-256-verified source bytes and
+``paper parse-list`` / ``paper parse-json`` for immutable parse revisions.
 The markdown endpoint follows a long-running-operation contract: cache
 miss returns 202 + ``Operation-Location``; we transparently poll until
 ``state == cached`` (or a terminal failure) then stream the bytes. The
@@ -34,13 +36,15 @@ conversion, so a 404 means "run ``paper get markdown`` first".
 
 ID forms accepted (server-side auto-resolution):
 
+* Canonical QAtlas paper id    ``qa_…`` (work identity, not a version pin)
+
 * Versioned arxiv id          ``0811.3171v3`` / ``quant-ph/9508027v2``
 * Bare arxiv id (no version)  ``0811.3171`` / ``quant-ph/9508027``
                               → server resolves to latest published vN
 * Bare old-style (no category) ``9508027``
                               → server applies ``category=quant-ph`` default
 * DOI                          ``10.1103/PhysRevLett.103.150502``
-                              → server resolves to canonical arxiv id
+                              → server resolves the registered work and its assets
 
 Whenever the server applies a default, this CLI prints a one-line
 ``Note:`` to stderr summarizing what it inferred (read from the
@@ -731,7 +735,7 @@ def _add_id_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "id_or_doi",
         help=(
-            "arxiv id (versioned or bare; new-style or old-style) OR a DOI. "
+            "canonical qa_ paper id OR arxiv id (versioned or bare; new-style or old-style) OR a DOI. "
             "Server auto-fills missing version (latest) and missing category (quant-ph). "
             "Examples: 0811.3171v3, 0811.3171, quant-ph/9508027v2, 9508027, "
             "10.1103/PhysRevLett.103.150502"
@@ -899,7 +903,7 @@ def build_status_parser() -> argparse.ArgumentParser:
         "--kind",
         choices=["markdown"],
         default="markdown",
-        help='Which status endpoint to hit. Only "markdown" remains — PDF delivery is disabled server-side (410 Gone).',
+        help='Which status endpoint to hit. Only "markdown" remains in this legacy status API; use paper pdf for immutable source PDFs.',
     )
     p.add_argument(
         "--quiet-notes",
@@ -1009,6 +1013,7 @@ Usage:
 
   Block-level comments originals (new; needs a server with Q1/Q2):
   qatlas paper pdf         ID [--source S|--version vN] [-o FILE]
+  qatlas paper source-list ID [--json]
   qatlas paper parse-list  ID [--json]
   qatlas paper parse-json  ID REVISION [-o FILE]
   qatlas paper block-list  ID REVISION [--page-idx N] [--cursor C] [--json]
@@ -1082,6 +1087,7 @@ def main(argv: list[str] | None = None) -> int:
             parser = build_mineru_lease_parser(prog=prog_base)
     elif subcommand in {
         "pdf",
+        "source-list",
         "parse-list",
         "parse-json",
         "block-list",
