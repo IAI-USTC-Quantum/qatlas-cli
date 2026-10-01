@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.37.0rc2 (2026-10-01)
+
+### Feat
+
+- **paper**: list immutable sources and document retrieval workflow (#1)
+- **comments**: list --since passthrough for incremental sync
+
 ## v0.37.0rc1 (2026-09-29)
 
 ### Feat
