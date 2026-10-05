@@ -9,6 +9,7 @@ Subcommands::
     qatlas paper list         [--has-md true] [--status …] [-q …] [--json]
     qatlas paper lookup       REF... [--json]
     qatlas paper fetch        ID|DOI|URL... [--file FILE] [--json]
+    qatlas paper source-register URL --title TITLE --author NAME --year YYYY [--json]
     qatlas paper jobs         [--remote] [--watch] [--json]
     qatlas paper mineru-lease ID [--ttl-seconds N]
 
@@ -1013,6 +1014,7 @@ Usage:
   qatlas paper list         [--has-md true] [--status …] [-q …] [--json]
   qatlas paper lookup       arxiv:ID | doi:DOI | openalex:ID ... [--json]
   qatlas paper fetch        ID|DOI|URL... [--file FILE] [--json]
+  qatlas paper source-register URL --title TITLE --author NAME [--author NAME ...] --year YYYY [--json]
   qatlas paper jobs         [--remote] [--watch] [--json]
   qatlas paper mineru-lease ID_OR_DOI [--ttl-seconds N]
   qatlas paper mineru-lease release ID_OR_DOI CLAIM_ID
@@ -1084,6 +1086,10 @@ def main(argv: list[str] | None = None) -> int:
         parser = build_fetch_parser()
     elif subcommand == "jobs":
         parser = build_jobs_parser()
+    elif subcommand == "source-register":
+        from qatlas.client import external_sources
+
+        return external_sources.main(argv)
     elif subcommand in {"mineru-lease", "claim"}:
         prog_base = "qatlas paper mineru-lease" if subcommand == "mineru-lease" else "qatlas paper claim"
         if argv and argv[0] == "release":

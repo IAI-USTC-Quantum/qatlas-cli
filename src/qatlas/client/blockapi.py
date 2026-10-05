@@ -136,10 +136,11 @@ class ApiError(Exception):
 def idempotency_key(method: str, path: str, body: str) -> str:
     """Compute the §12.2 ``Idempotency-Key`` header value.
 
-    Deterministic: SHA-256 over ``METHOD + path + body``. Retrying the
-    exact same logical request re-derives the same key, so the server
-    replays the original result instead of double-posting. A *changed*
-    body under the same key is a server-side 409 by contract.
+    Deterministic: SHA-256 over ``METHOD + path + body``. Resubmitting the
+    exact same logical request re-derives the same key. Comment endpoints
+    replay the original result and reject a changed body under the same key
+    with 409; other endpoints, including source registration, have their own
+    idempotency contracts. This helper does not retry or guarantee replay.
     """
     digest = hashlib.sha256(f"{method.upper()}|{path}|{body}".encode("utf-8"))
     return digest.hexdigest()
@@ -192,6 +193,7 @@ def _error_from_response(
     *,
     what: str,
     write: bool,
+    url_path: str = "",
 ) -> ApiError:
     """Map an HTTP error response onto the structured ApiError table."""
     body = _parse_error_body(resp)
@@ -199,6 +201,7 @@ def _error_from_response(
     if isinstance(body, dict):
         detail = str(body.get("detail") or body.get("error") or "")
     status = resp.status_code
+    source_registration = url_path == "/api/papers/source-register"
 
     if status in _STATUS_EXIT:
         kind = {
@@ -216,6 +219,8 @@ def _error_from_response(
             )
         elif status == 403 and write:
             hint = (
+                "source registration requires the papers:write scope"
+                if source_registration else
                 "writing comments requires a user PAT/session with the "
                 "comments:write scope (system PATs are read-only)"
             )
@@ -232,7 +237,17 @@ def _error_from_response(
             hint=hint,
         )
 
-    if _looks_like_endpoint_missing(resp):
+    # Registration has no resource-id path segment; its 404 is a missing route,
+    # including PocketBase's JSON 404 envelope (upstream PDF errors are 422).
+    if _looks_like_endpoint_missing(resp) or (source_registration and status == 404):
+        if source_registration:
+            return ApiError(
+                f"{what} failed: the server does not implement external source "
+                f"registration (HTTP {status})",
+                kind="unsupported", exit_code=EXIT_UNSUPPORTED,
+                status=status, body=body,
+                hint="ask the server operator to upgrade qatlasd for source registration",
+            )
         return ApiError(
             f"{what} failed: the server does not implement the "
             f"block-comments endpoints (HTTP {status})",
@@ -339,7 +354,7 @@ def _request(
         ) from exc
     check_response_version(resp, write=write, request_sent=True)
     if not 200 <= resp.status_code < 300:
-        raise _error_from_response(resp, what=what, write=write)
+        raise _error_from_response(resp, what=what, write=write, url_path=url_path)
     return resp
 
 
