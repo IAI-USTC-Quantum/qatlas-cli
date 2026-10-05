@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.37.0rc3 (2026-10-05)
+
+### Feat
+
+- **paper**: register verified external sources with metadata
+
+### Fix
+
+- **client**: surface unknown outcomes after all write transport failures
+- **paper**: repair legacy defaults header arrows
+
 ## v0.37.0rc2 (2026-10-01)
 
 ### Feat
