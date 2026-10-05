@@ -23,8 +23,9 @@ Output discipline:
   verbatim, never a truncated reading window); the default is a
   compact human table/summary on stdout.
 
-``ID`` is the canonical ``qa_`` paper id (aliases the server resolver
-accepts also work, but cache reuse requires ``qa_``). ``REVISION`` is
+``ID`` is the canonical ``qa_`` paper id or a server-resolved alias.
+PDF aliases are verified too and cached under the returned canonical id;
+other immutable commands require a canonical id for cache reuse. ``REVISION`` is
 a parse revision id from ``parse-list`` — never "latest": comments
 pin their anchor to an immutable revision (plan §4.2), and so do we.
 
@@ -225,56 +226,76 @@ def _pick_source(
 
 
 def cmd_pdf(args: argparse.Namespace) -> int:
-    """Download the original PDF bytes (hash-verified, cached)."""
+    """Download a gated, source-pinned PDF without requiring source listing."""
     base_url = base_url_from_args(args)
-    sources = fetch_sources(args, base_url)
-    src = _pick_source(
-        sources, source_id=args.source, version=args.version
-    )
-    sha256 = str(src.get("sha256") or "")
-    source_id = str(src.get("source_id") or "")
-    if not sha256 or not source_id:
+    if args.source is not None and args.version is not None:
         raise blockapi.ApiError(
-            f"sources entry missing sha256/source_id: {src!r}",
-            kind="bad_content",
-            exit_code=blockapi.EXIT_TRANSPORT,
+            "--source/--source-id and --version are mutually exclusive",
+            kind="usage", exit_code=blockapi.EXIT_USAGE,
         )
-    path = (
-        f"/api/papers/{blockapi.encode_path_segment(args.paper_id)}/sources/"
-        f"{blockapi.encode_path_segment(source_id)}/pdf"
+    params: dict[str, str] = {}
+    if args.source is not None:
+        params["source_id"] = args.source
+    if args.version is not None:
+        params["version"] = args.version
+    path = f"/api/papers/{blockapi.encode_path_segment(args.paper_id)}/pdf"
+    resp = blockapi._request(
+        args, "GET", path, what="pdf", params=params or None,
+        stream=True, base_url=base_url,
     )
-
-    cacheable = _QA_ID_RE.match(args.paper_id) is not None
-    if not cacheable:
-        _stderr(
-            "Note: paper id is not canonical qa_ — download proceeds but is "
-            "not cached (resolve the qa_ id for cache reuse)."
+    try:
+        content_type = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if resp.status_code != 200 or content_type not in {"application/pdf", "application/octet-stream"}:
+            raise blockapi.ApiError(
+                f"pdf: expected HTTP 200 PDF, got HTTP {resp.status_code} "
+                f"Content-Type {content_type!r}; refusing to emit bytes",
+                kind="bad_content", exit_code=blockapi.EXIT_TRANSPORT,
+            )
+        source_id = resp.headers.get("X-QAtlas-Source-Id", "")
+        sha256 = resp.headers.get("X-QAtlas-PDF-SHA256") or resp.headers.get("X-QAtlas-Sha256", "")
+        if not source_id or not sha256:
+            raise blockapi.ApiError(
+                "pdf: missing X-QAtlas-Source-Id or X-QAtlas-PDF-SHA256/"
+                "X-QAtlas-Sha256 — cannot verify source identity/integrity",
+                kind="bad_content", exit_code=blockapi.EXIT_TRANSPORT,
+            )
+        if args.source is not None and source_id != args.source:
+            raise blockapi.ApiError(
+                f"pdf: server substituted source {source_id!r} for requested {args.source!r}",
+                kind="bad_content", exit_code=blockapi.EXIT_TRANSPORT,
+            )
+        origin = resp.headers.get("X-QAtlas-Source-Origin", "")
+        origin_version = re.search(r"v([1-9][0-9]*)$", origin) if origin.startswith("arxiv:") else None
+        if args.version is not None and (
+            origin_version is None or origin_version.group(1) != args.version.lstrip("vV")
+        ):
+            raise blockapi.ApiError(
+                f"pdf: source origin {origin!r} does not match requested version {args.version!r}",
+                kind="bad_content", exit_code=blockapi.EXIT_TRANSPORT,
+            )
+        canonical = resp.headers.get("X-QAtlas-Paper-Id") or resp.headers.get("X-QAtlas-Resolved-Id")
+        if canonical is None and _QA_ID_RE.fullmatch(args.paper_id):
+            canonical = args.paper_id
+        if _QA_ID_RE.fullmatch(args.paper_id) and canonical != args.paper_id:
+            raise blockapi.ApiError(
+                f"pdf: server substituted paper {canonical!r} for requested {args.paper_id!r}",
+                kind="bad_content", exit_code=blockapi.EXIT_TRANSPORT,
+            )
+        other_sha = resp.headers.get("X-QAtlas-Sha256")
+        if other_sha and other_sha != sha256:
+            raise blockapi.ApiError(
+                "pdf: conflicting SHA-256 response headers", kind="bad_content",
+                exit_code=blockapi.EXIT_TRANSPORT,
+            )
+        _stderr(f"source={source_id} origin={origin or '?'} paper={canonical or args.paper_id}")
+        blockcache.verified_response_to_output(
+            resp, sha256=sha256, output=args.output, base_url=base_url,
+            paper_id=canonical, force_refresh=args.force_refresh,
+            use_cache=not args.no_cache, log=_stderr,
         )
-        data, _ = blockapi.download_bytes(
-            args,
-            path,
-            what="pdf",
-            expected_content_prefixes=("application/pdf", "application/octet-stream"),
-            base_url=base_url,
-        )
-    else:
-        data, hit = blockcache.cached_download(
-            args,
-            base_url=base_url,
-            paper_id=args.paper_id,
-            kind="pdf",
-            sha256=sha256,
-            url_path=path,
-            what="pdf",
-            expected_content_prefixes=("application/pdf", "application/octet-stream"),
-            force_refresh=args.force_refresh,
-            use_cache=not args.no_cache,
-            log=_stderr,
-        )
-        if not hit:
-            _stderr(f"downloaded {len(data)} bytes (sha256 verified: {sha256})")
-    blockcache.stream_out(data, args.output)
-    return 0
+        return 0
+    finally:
+        resp.close()
 
 
 def cmd_source_list(args: argparse.Namespace) -> int:
@@ -385,6 +406,11 @@ def cmd_parse_json(args: argparse.Namespace) -> int:
             expected_content_prefixes=("application/json", "application/octet-stream"),
             base_url=base_url,
         )
+        if blockapi.sha256_hex(data) != sha256:
+            raise blockapi.ApiError(
+                "parse json: downloaded bytes failed artifact_sha256 verification — NOT emitted",
+                kind="bad_content", exit_code=blockapi.EXIT_TRANSPORT,
+            )
     blockcache.stream_out(data, args.output)
     return 0
 
@@ -517,13 +543,15 @@ def build_pdf_parser() -> argparse.ArgumentParser:
             "Download a paper's original PDF bytes. The source is pinned: "
             "--source SOURCE_ID or --version vN never fall back to another "
             "version; default is the current source pointer. Downloads are "
-            "sha256-verified against the sources listing and published "
-            "atomically to the content-addressed cache (config: cache_dir)."
+            "sha256-verified against authenticated response headers for qa_ ids "
+            "and aliases, then cached atomically (config: cache_dir). Requires "
+            "server paper_access; no source-list preflight is required."
         ),
     )
     _id_arg(p)
-    p.add_argument("--source", default=None, help="exact source_id from the sources listing")
-    p.add_argument(
+    pins = p.add_mutually_exclusive_group()
+    pins.add_argument("--source", "--source-id", dest="source", default=None, help="pin an exact source_id; never fall back")
+    pins.add_argument(
         "--version",
         default=None,
         metavar="vN",

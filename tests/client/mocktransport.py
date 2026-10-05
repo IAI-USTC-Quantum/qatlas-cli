@@ -54,7 +54,10 @@ class _MockAdapter(HTTPAdapter):
 
     # pylint: disable=arguments-differ
     def send(self, request: requests.PreparedRequest, **kwargs: Any):
-        return self._transport._dispatch(request)
+        response = self._transport._dispatch(request)
+        response.request = request
+        response.url = request.url
+        return response
 
 
 class MockTransport:

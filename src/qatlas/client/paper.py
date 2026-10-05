@@ -25,15 +25,16 @@ available (no ``paper_access.enabled`` gate, no LRO, no side effects).
 It prints the JSON response body verbatim; the registry does not store
 abstracts, so none is included.
 
-The legacy ``GET .../pdf`` delivery endpoint is disabled (410 Gone),
-so there is no ``paper get pdf`` subcommand. On servers supporting the
-originals API, use ``paper pdf`` for SHA-256-verified source bytes and
-``paper parse-list`` / ``paper parse-json`` for immutable parse revisions.
+Use ``paper pdf`` for the authenticated, paper-access-gated
+``GET /api/papers/{id}/pdf`` endpoint: source-pinned PDF bytes are streamed
+and SHA-256-verified for canonical ids and aliases without enumerating sources.
+Use ``paper read`` for an agent-friendly, resumable Middle-derived JSON view;
+``paper parse-list`` / ``paper parse-json`` still expose immutable raw artifacts.
 The markdown endpoint follows a long-running-operation contract: cache
 miss returns 202 + ``Operation-Location``; we transparently poll until
-``state == cached`` (or a terminal failure) then stream the bytes. The
-images zip has no LRO of its own — it is a byproduct of the MinerU
-conversion, so a 404 means "run ``paper get markdown`` first".
+``state == cached`` (or a terminal failure) then stream the bytes. The images/figures/image commands also handle new source-specific 202
+operations with bounded same-origin polling and pinned return-GETs; old
+servers' 404/no-conversion responses retain the legacy Markdown hint.
 
 ID forms accepted (server-side auto-resolution):
 
@@ -57,9 +58,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
+from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urljoin, urlsplit
 
 import requests
 
@@ -164,7 +168,8 @@ def _retry_after_seconds(response: requests.Response) -> float:
     if not raw:
         return _DEFAULT_POLL_INTERVAL_S
     try:
-        return max(1.0, float(raw))
+        seconds = float(raw)
+        return max(1.0, seconds) if math.isfinite(seconds) else _DEFAULT_POLL_INTERVAL_S
     except ValueError:
         return _DEFAULT_POLL_INTERVAL_S
 
@@ -203,6 +208,7 @@ def _poll_until_cached(
     status_url: str,
     *,
     cached_predicate,
+    initial_response: requests.Response | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Poll the status endpoint until cache-hit or terminal failure.
 
@@ -215,7 +221,17 @@ def _poll_until_cached(
     deadline = time.monotonic() + args.max_wait
     interval = _DEFAULT_POLL_INTERVAL_S
     last: dict[str, Any] = {}
+    if initial_response is not None:
+        delay = _retry_after_seconds(initial_response)
+        remaining = deadline - time.monotonic()
+        if remaining < delay:
+            print(f"timed out after {args.max_wait}s before the next allowed status poll", file=sys.stderr)
+            return 1, last
+        time.sleep(delay)
     while True:
+        if initial_response is not None and time.monotonic() >= deadline:
+            print(f"timed out after {args.max_wait}s; last state={last.get('state', '?')}", file=sys.stderr)
+            return 1, last
         try:
             resp = requests.get(
                 status_url,
@@ -238,6 +254,9 @@ def _poll_until_cached(
         except json.JSONDecodeError:
             print(f"status poll: non-JSON response\nHTTP {resp.status_code} {resp.reason}\n{resp.text}", file=sys.stderr)
             return 1, last
+        if not isinstance(last, dict):
+            print("status poll: expected a JSON object", file=sys.stderr)
+            return 1, {}
         # Honor server-side Retry-After even on 200 status responses.
         interval = _retry_after_seconds(resp)
         if cached_predicate(last):
@@ -293,98 +312,243 @@ def _stream_to_output(response: requests.Response, output: str | None) -> int:
 
 
 def _do_get(args: argparse.Namespace, kind: str) -> int:
-    """Implementation of `paper get markdown` (the only LRO-shaped get)."""
-    if kind not in {"markdown"}:
+    """Retrieve original Markdown with legacy and new readiness support."""
+    if kind != "markdown":
         raise ValueError(f"unknown kind: {kind!r}")
     base_url = base_url_from_args(args)
-    id_or_doi = args.id_or_doi.strip().lstrip("/")
-    asset_url = f"{base_url}/api/papers/{id_or_doi}/{kind}"
-
-    # First call: may return 200 (cache hit), 202 (LRO started), 4xx/5xx
-    # (terminal failure). For 202 we then poll the status endpoint.
-    resp = requests.get(
-        asset_url,
-        headers={**auth_headers(args), **client_version_headers()},
-        verify=request_verify(args),
-        timeout=args.request_timeout,
-        stream=True,
-        allow_redirects=True,
+    ident = args.id_or_doi.strip().lstrip("/")
+    response, code = _get_with_content_wait(
+        args, f"{base_url}/api/papers/{ident}/markdown", kind=kind, stream=True,
     )
-    check_response_version(resp, write=False)
-
-    # 200: we have bytes already.
-    if resp.status_code == 200:
-        _print_notes(resp, quiet=args.quiet_notes)
-        return _stream_to_output(resp, args.output)
-
-    # 202: long-running operation started; close this connection and
-    # switch to polling the status endpoint.
-    if resp.status_code == 202:
-        _print_notes(resp, quiet=args.quiet_notes)
-        try:
-            initial_body = resp.json()
-        except json.JSONDecodeError:
-            initial_body = {}
-        resp.close()
-        if not args.quiet_progress:
-            print(
-                f"async operation started: {_format_eta(initial_body)}",
-                file=sys.stderr,
-            )
-        status_url = (
-            initial_body.get("operation", {}).get("status_url")
-            or resp.headers.get("Operation-Location")
-            or f"/api/papers/{id_or_doi}/{kind}/status"
-        )
-        # Operation-Location is path-only by convention; absolutize.
-        if status_url.startswith("/"):
-            status_url = base_url.rstrip("/") + status_url
-        if args.no_wait:
-            print_json(initial_body)
-            return 0
-
-        def is_ready(body: dict[str, Any]) -> bool:
-            # State "cached" implies the readiness flags, but check
-            # md_ready explicitly for clarity.
-            return body.get("state") == "cached" and body.get("md_ready", False)
-
-        exit_code, last_body = _poll_until_cached(
-            args, base_url, status_url, cached_predicate=is_ready
-        )
-        if exit_code != 0:
-            return exit_code
-
-        # Asset is now cached; re-issue the GET to stream bytes.
-        final = requests.get(
-            asset_url,
-            headers={**auth_headers(args), **client_version_headers()},
-            verify=request_verify(args),
-            timeout=args.request_timeout,
-            stream=True,
-            allow_redirects=True,
-        )
-        check_response_version(final, write=False)
-        if final.status_code != 200:
-            # Surface defaults headers + full JSON body so the agent
-            # sees server-side resolution even on the second-call
-            # failure path.
-            _print_notes(final, quiet=args.quiet_notes)
-            print(_render_server_error(f"{kind} (post-cache GET)", final), file=sys.stderr)
+    if response is None:
+        return code
+    try:
+        _print_notes(response, quiet=args.quiet_notes)
+        if response.status_code != 200:
+            print(_render_server_error(kind, response), file=sys.stderr)
             return 1
-        return _stream_to_output(final, args.output)
-
-    # Terminal failure on the initial call. Surface defaults headers
-    # first (server might have applied DOI/version inference even
-    # before failing), then dump body with detail / kind / arxiv_id /
-    # retry_after_iso / phase plus echoed requested_id / resolved_id /
-    # defaults_applied so the agent can decide retry vs give-up.
-    _print_notes(resp, quiet=args.quiet_notes)
-    print(_render_server_error(kind, resp), file=sys.stderr)
-    return 1
+        return _stream_to_output(response, args.output)
+    finally:
+        response.close()
 
 
 def cmd_get_markdown(args: argparse.Namespace) -> int:
     return _do_get(args, "markdown")
+
+
+def _read_json(response: requests.Response) -> dict[str, Any] | None:
+    try:
+        body = response.json()
+    except ValueError:
+        print(f"non-JSON read response:\nHTTP {response.status_code} {response.reason}\n{response.text}", file=sys.stderr)
+        return None
+    if not isinstance(body, dict):
+        print("read: expected a JSON object", file=sys.stderr)
+        return None
+    return body
+
+
+def cmd_read(args: argparse.Namespace) -> int:
+    """Emit a resumable Middle-derived JSON view, never a raw parse artifact."""
+    if args.block is not None and args.page is None:
+        print("read: --block requires --page (both are 1-based)", file=sys.stderr)
+        return 2
+    if not math.isfinite(args.max_wait) or args.max_wait < 0:
+        print("read: --max-wait must be finite and non-negative", file=sys.stderr)
+        return 2
+    base_url = base_url_from_args(args).rstrip("/")
+    ident = args.id_or_doi.strip().lstrip("/")
+    asset_url = f"{base_url}/api/papers/{quote(ident, safe='')}/read"
+    params = {
+        name: getattr(args, name)
+        for name in ("source_id", "revision", "page", "block", "cursor", "limit")
+        if getattr(args, name) is not None
+    }
+
+    def get_view() -> requests.Response:
+        return requests.get(
+            asset_url, params=params or None,
+            headers={**auth_headers(args), **client_version_headers()},
+            verify=request_verify(args), timeout=args.request_timeout,
+        )
+
+    resp = get_view()
+    try:
+        check_response_version(resp, write=False)
+        _print_notes(resp, quiet=args.quiet_notes)
+        if resp.status_code not in {200, 202}:
+            print(_render_server_error("read", resp), file=sys.stderr)
+            return 1
+        body = _read_json(resp)
+        if body is None:
+            return 1
+        if resp.status_code == 202:
+            operation = body.get("operation")
+            status_path = resp.headers.get("Operation-Location")
+            if not status_path and isinstance(operation, dict):
+                status_path = operation.get("status_url")
+            if not isinstance(status_path, str) or not status_path:
+                print("read: async response missing Operation-Location/status_url", file=sys.stderr)
+                return 1
+            status_url = urljoin(base_url + "/", status_path)
+            target = urlsplit(status_url)
+            origin = urlsplit(base_url)
+            if (target.scheme, target.netloc) != (origin.scheme, origin.netloc) or target.username or target.password:
+                print("read: refusing cross-origin operation URL (authentication must stay on the configured server)", file=sys.stderr)
+                return 1
+            if args.no_wait:
+                # Include the header-only status locator in machine-readable async
+                # output; do not make consumers scrape progress from stderr.
+                body = dict(body)
+                body["operation"] = {**(operation if isinstance(operation, dict) else {}), "status_url": status_path}
+                body["retry_after"] = _retry_after_seconds(resp)
+            else:
+                if not args.quiet_progress:
+                    print(f"async read started: {_format_eta(body)}", file=sys.stderr)
+                # Hold source identity stable across a changing current pointer.
+                if not params.get("source_id") and body.get("source_id"):
+                    params["source_id"] = body["source_id"]
+                initial = resp
+                resp.close()
+                code, last = _poll_until_cached(
+                    args, base_url, status_url,
+                    cached_predicate=lambda state: state.get("state") in {"ready", "cached", "done"},
+                    initial_response=initial,
+                )
+                if code:
+                    return code
+                if not params.get("revision") and last.get("revision"):
+                    params["revision"] = last["revision"]
+                if not params.get("source_id") and last.get("source_id"):
+                    params["source_id"] = last["source_id"]
+                resp = get_view()
+                check_response_version(resp, write=False)
+                if resp.status_code != 200:
+                    print(_render_server_error("read (post-parse GET)", resp), file=sys.stderr)
+                    return 1
+                body = _read_json(resp)
+                if body is None:
+                    return 1
+        if resp.status_code == 200:
+            # A proxy/misrouted raw Middle object must not masquerade as a
+            # reading window. Preserve every field, but require the view's
+            # identity, renderer and continuation envelope.
+            strings = ("paper_id", "source_id", "revision", "renderer", "format", "content")
+            if any(not isinstance(body.get(key), str) for key in strings) or any(
+                not body.get(key) for key in strings if key != "content"
+            ) or not isinstance(body.get("truncated"), bool) or "next_request" not in body:
+                print("read: invalid derived-view envelope (not a source/revision-pinned reading view)", file=sys.stderr)
+                return 1
+            continuation = body["next_request"]
+            if body["truncated"] and (
+                not isinstance(continuation, dict) or not isinstance(continuation.get("cursor"), str)
+                or not continuation["cursor"]
+            ):
+                print("read: truncated view is missing next_request.cursor", file=sys.stderr)
+                return 1
+            if ident.startswith("qa_") and body["paper_id"] != ident:
+                print("read: server substituted the requested canonical paper identity", file=sys.stderr)
+                return 1
+            for pin in ("source_id", "revision"):
+                if params.get(pin) and body.get(pin) != params[pin]:
+                    print(f"read: server substituted {pin}: requested {params[pin]!r}, got {body.get(pin)!r}", file=sys.stderr)
+                    return 1
+        if args.output is None or args.output == "-":
+            print_json(body)
+        else:
+            dest = Path(args.output).expanduser()
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(json.dumps(body, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        return 0
+    finally:
+        resp.close()
+
+
+def _get_with_content_wait(
+    args: argparse.Namespace, asset_url: str, *, kind: str, stream: bool = False,
+) -> tuple[requests.Response | None, int]:
+    """Preserve asset commands while source-specific content is prepared."""
+    max_wait = getattr(args, "max_wait", _DEFAULT_MAX_WAIT_S)
+    if not math.isfinite(max_wait) or max_wait < 0:
+        print(f"{kind}: --max-wait must be finite and non-negative", file=sys.stderr)
+        return None, 2
+    base_url = base_url_from_args(args).rstrip("/")
+    params: dict[str, Any] = {}
+
+    def get() -> requests.Response:
+        response = requests.get(
+            asset_url, params=dict(params) or None,
+            headers={**auth_headers(args), **client_version_headers()},
+            verify=request_verify(args), timeout=args.request_timeout,
+            stream=stream, allow_redirects=True,
+        )
+        check_response_version(response, write=False)
+        return response
+
+    response = get()
+    if response.status_code != 202:
+        return response, 0
+    body = _read_json(response)
+    if body is None:
+        response.close()
+        return None, 1
+    _print_notes(response, quiet=args.quiet_notes)
+    operation = body.get("operation")
+    status_path = response.headers.get("Operation-Location") or (
+        operation.get("status_url") if isinstance(operation, dict) else None
+    ) or (asset_url + "/status" if kind == "markdown" else None)
+    if not isinstance(status_path, str) or not status_path:
+        print(f"{kind}: async response missing Operation-Location/status_url", file=sys.stderr)
+        response.close()
+        return None, 1
+    status_url = urljoin(base_url + "/", status_path)
+    target, origin = urlsplit(status_url), urlsplit(base_url)
+    if (target.scheme, target.netloc) != (origin.scheme, origin.netloc) or target.username or target.password:
+        print(f"{kind}: refusing cross-origin operation URL", file=sys.stderr)
+        response.close()
+        return None, 1
+    if getattr(args, "no_wait", False):
+        body = dict(body)
+        body["operation"] = {**(operation if isinstance(operation, dict) else {}), "status_url": status_path}
+        body["retry_after"] = _retry_after_seconds(response)
+        print_json(body)
+        response.close()
+        return None, 0
+    for pin in ("source_id", "revision"):
+        if body.get(pin):
+            params[pin] = body[pin]
+    if not getattr(args, "quiet_progress", False):
+        print(f"async {kind} started: {_format_eta(body)}", file=sys.stderr)
+    initial = response
+    response.close()
+    code, last = _poll_until_cached(
+        args, base_url, status_url,
+        cached_predicate=lambda status: (
+            status.get("state") in {"ready", "cached", "done"}
+            and (status.get("ready", False) or status.get("md_ready", False))
+        ),
+        initial_response=initial,
+    )
+    if code:
+        return None, code
+    for pin in ("source_id", "revision"):
+        if last.get(pin):
+            if params.get(pin) and params[pin] != last[pin]:
+                print(f"{kind}: status substituted {pin}", file=sys.stderr)
+                return None, 1
+            params[pin] = last[pin]
+    response = get()
+    if response.status_code != 200:
+        print(_render_server_error(f"{kind} (post-parse GET)", response), file=sys.stderr)
+        response.close()
+        return None, 1
+    for pin, header in (("source_id", "X-QAtlas-Source-Id"), ("revision", "X-QAtlas-Parse-Revision")):
+        reported = response.headers.get(header)
+        if reported and params.get(pin) and reported != params[pin]:
+            print(f"{kind}: response substituted {pin}", file=sys.stderr)
+            response.close()
+            return None, 1
+    return response, 0
 
 
 def cmd_get_images(args: argparse.Namespace) -> int:
@@ -398,15 +562,11 @@ def cmd_get_images(args: argparse.Namespace) -> int:
     """
     base_url = base_url_from_args(args)
     id_or_doi = args.id_or_doi.strip().lstrip("/")
-    resp = requests.get(
-        f"{base_url}/api/papers/{id_or_doi}/images/zip",
-        headers={**auth_headers(args), **client_version_headers()},
-        verify=request_verify(args),
-        timeout=args.request_timeout,
-        stream=True,
-        allow_redirects=True,
+    resp, code = _get_with_content_wait(
+        args, f"{base_url}/api/papers/{id_or_doi}/images/zip", kind="images", stream=True,
     )
-    check_response_version(resp, write=False)
+    if resp is None:
+        return code
     if resp.status_code == 200:
         _print_notes(resp, quiet=args.quiet_notes)
         return _stream_to_output(resp, args.output)
@@ -431,13 +591,11 @@ def cmd_get_figures(args: argparse.Namespace) -> int:
     """
     base_url = base_url_from_args(args)
     id_or_doi = args.id_or_doi.strip().lstrip("/")
-    resp = requests.get(
-        f"{base_url}/api/papers/{id_or_doi}/figures",
-        headers={**auth_headers(args), **client_version_headers()},
-        verify=request_verify(args),
-        timeout=args.request_timeout,
+    resp, code = _get_with_content_wait(
+        args, f"{base_url}/api/papers/{id_or_doi}/figures", kind="figures",
     )
-    check_response_version(resp, write=False)
+    if resp is None:
+        return code
     _print_notes(resp, quiet=args.quiet_notes)
     if not resp.ok:
         print(_render_server_error("figures", resp), file=sys.stderr)
@@ -460,15 +618,11 @@ def cmd_get_image(args: argparse.Namespace) -> int:
     base_url = base_url_from_args(args)
     id_or_doi = args.id_or_doi.strip().lstrip("/")
     name = args.name.strip().strip("/")
-    resp = requests.get(
-        f"{base_url}/api/papers/{id_or_doi}/images/{name}",
-        headers={**auth_headers(args), **client_version_headers()},
-        verify=request_verify(args),
-        timeout=args.request_timeout,
-        stream=True,
-        allow_redirects=True,
+    resp, code = _get_with_content_wait(
+        args, f"{base_url}/api/papers/{id_or_doi}/images/{name}", kind="image", stream=True,
     )
-    check_response_version(resp, write=False)
+    if resp is None:
+        return code
     if resp.status_code == 200:
         _print_notes(resp, quiet=args.quiet_notes)
         return _stream_to_output(resp, args.output)
@@ -491,7 +645,7 @@ def _markdown_ready(args: argparse.Namespace, base_url: str, id_or_doi: str) -> 
         body = resp.json()
     except (requests.RequestException, json.JSONDecodeError):
         return False
-    return isinstance(body, dict) and bool(body.get("md_ready"))
+    return isinstance(body, dict) and bool(body.get("md_ready") or body.get("ready"))
 
 
 def cmd_get_metadata(args: argparse.Namespace) -> int:
@@ -750,13 +904,7 @@ def _add_id_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_output_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--output",
-        "-o",
-        default=None,
-        help='Write bytes to FILE. Use "-" or omit for stdout.',
-    )
+def _add_wait_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--no-wait",
         action="store_true",
@@ -773,6 +921,14 @@ def _add_output_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Suppress the per-poll '...waiting: state ...' progress lines on stderr.",
     )
+
+
+def _add_output_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--output", "-o", default=None,
+        help='Write bytes to FILE. Use "-" or omit for stdout.',
+    )
+    _add_wait_args(parser)
     parser.add_argument(
         "--quiet-notes",
         action="store_true",
@@ -789,6 +945,44 @@ def build_get_markdown_parser() -> argparse.ArgumentParser:
     _add_output_args(p)
     add_common_http_args(p)
     p.set_defaults(func=cmd_get_markdown)
+    return p
+
+
+def _positive_int(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return number
+
+
+def _read_limit(value: str) -> int:
+    number = _positive_int(value)
+    if number > 100_000:
+        raise argparse.ArgumentTypeError("limit must be 1..100000 Unicode characters")
+    return number
+
+
+def build_read_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="qatlas paper read",
+        description=(
+            "Read an agent-friendly, resumable JSON view derived from MinerU Middle. "
+            "Returns source/revision pins, content ranges, truncated and next_request. "
+            "This is NOT the original artifact; use parse-json for immutable raw bytes. "
+            "Missing parses are prepared asynchronously by the server."
+        ),
+    )
+    _add_id_arg(p)
+    p.add_argument("--source-id", "--source", dest="source_id", help="pin an exact PDF source")
+    p.add_argument("--revision", help="pin an immutable parse revision")
+    p.add_argument("--page", type=_positive_int, help="select a 1-based page")
+    p.add_argument("--block", type=_positive_int, help="select a 1-based block within --page")
+    p.add_argument("--cursor", help="resume using next_request.cursor; preserves the server-pinned selection")
+    p.add_argument("--limit", type=_read_limit, help="content budget: 1..100000 Unicode characters (server default 30000)")
+    p.add_argument("--json", action="store_true", help="JSON is always emitted; accepted for scripting consistency")
+    _add_output_args(p)
+    add_common_http_args(p)
+    p.set_defaults(func=cmd_read)
     return p
 
 
@@ -813,6 +1007,7 @@ def build_get_images_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Suppress the 'Note (server applied defaults): ...' line on stderr.",
     )
+    _add_wait_args(p)
     add_common_http_args(p)
     p.set_defaults(func=cmd_get_images)
     return p
@@ -937,6 +1132,7 @@ def build_get_figures_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Suppress the 'Note (server applied defaults): ...' line on stderr.",
     )
+    _add_wait_args(p)
     add_common_http_args(p)
     p.set_defaults(func=cmd_get_figures)
     return p
@@ -966,6 +1162,7 @@ def build_get_image_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Suppress the 'Note (server applied defaults): ...' line on stderr.",
     )
+    _add_wait_args(p)
     add_common_http_args(p)
     p.set_defaults(func=cmd_get_image)
     return p
@@ -1019,8 +1216,11 @@ Usage:
   qatlas paper mineru-lease ID_OR_DOI [--ttl-seconds N]
   qatlas paper mineru-lease release ID_OR_DOI CLAIM_ID
 
-  Block-level comments originals (new; needs a server with Q1/Q2):
-  qatlas paper pdf         ID [--source S|--version vN] [-o FILE]
+  Source PDFs and resumable reading (paper_access.enabled required):
+  qatlas paper pdf         ID [--source-id S|--version vN] [-o FILE]
+  qatlas paper read        ID [--source-id S] [--revision R] [--page N] [--block N]
+                             [--cursor C] [--limit N] [-o FILE] [--no-wait]
+  Immutable parse artifacts and block-level comments (server Q1/Q2):
   qatlas paper source-list ID [--json]
   qatlas paper parse-list  ID [--json]
   qatlas paper parse-json  ID REVISION [-o FILE]
@@ -1034,16 +1234,16 @@ ID forms accepted:
   - Bare arxiv id (no version)  0811.3171  (server adds latest vN)
   - Bare old-style (no category) 9508027   (server adds quant-ph/)
   - DOI                          10.1103/PhysRevLett.103.150502
-  - Canonical qa_ paper id       qa_… (required family for the
-                                 pdf/parse-*/block-* commands' cache)
+  - Canonical qa_ paper id       qa_… (immutable work identity; PDF aliases
+                                 also cache under the resolved qa_ identity)
 
-The legacy markdown-images endpoints deliver via ``paper get`` above; the
-new ``paper pdf`` path serves the immutable source PDF from the
-block-comments originals API (sha256-verified, content-addressed cache
-under the configurable cache_dir).
+Markdown/images deliver via ``paper get`` above; ``paper pdf`` directly
+streams authenticated source-pinned PDF bytes (sha256-verified before output,
+content-addressed cache under cache_dir). ``paper read`` emits derived JSON,
+including locators and a pinned next_request.cursor; it is not raw parse-json.
 
-Server-side endpoints must be enabled via ``paper_access.enabled: true``
-in the server's config.yaml (legacy part). Defaults applied by the server
+PDF/read and legacy delivery endpoints must be enabled via
+``paper_access.enabled: true`` in the server's config.yaml. Defaults applied by the server
 are surfaced on stderr (use --quiet-notes to suppress).
 
 Use 'qatlas paper <subcommand> --help' for full options.
@@ -1076,6 +1276,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"unknown 'paper get' subcommand: {kind!r}", file=sys.stderr)
             _print_top_help()
             return 2
+    elif subcommand == "read":
+        parser = build_read_parser()
     elif subcommand == "status":
         parser = build_status_parser()
     elif subcommand == "list":

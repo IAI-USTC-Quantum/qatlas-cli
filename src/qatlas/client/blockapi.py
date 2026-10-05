@@ -240,6 +240,14 @@ def _error_from_response(
     # Registration has no resource-id path segment; its 404 is a missing route,
     # including PocketBase's JSON 404 envelope (upstream PDF errors are 422).
     if _looks_like_endpoint_missing(resp) or (source_registration and status == 404):
+        if url_path.startswith("/api/papers/") and url_path.endswith("/pdf") and "/sources/" not in url_path:
+            return ApiError(
+                f"{what} failed: paper access is disabled or this server does not "
+                f"implement direct PDF delivery (HTTP {status})",
+                kind="unsupported", exit_code=EXIT_UNSUPPORTED,
+                status=status, body=body,
+                hint="ask the server operator to enable paper_access or upgrade qatlasd",
+            )
         if source_registration:
             return ApiError(
                 f"{what} failed: the server does not implement external source "

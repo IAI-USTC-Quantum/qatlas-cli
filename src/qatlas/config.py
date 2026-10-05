@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Optional, Tuple, Type
+from typing import Any, Literal, Optional, Tuple, Type
 
 from pydantic import Field, field_validator
 from pydantic_settings import (
@@ -82,8 +82,10 @@ _DEFAULT_CONFIG_YAML = """\
 # mineru_api_tokens:        # List of JWTs from https://mineru.net
 #   - jwt-1                 # client rotates across them when one hits
 #   - jwt-2                 # the daily quota
-# mineru_api_base_url: https://mineru.net
-# mineru_model_version: vlm
+# mineru_api_base_url: https://mineru.net  # hosted V1 normalizes to /api
+# mineru_api_protocol: v1                # contribution runner default; explicit legacy-v4 optional
+# mineru_tier: standard                  # flash/basic/standard/advanced, separate from model
+# mineru_model_version: vlm              # legacy V4 only, not a V1 tier
 # mineru_language: ch
 # mineru_is_ocr: false
 # mineru_enable_formula: true
@@ -170,6 +172,9 @@ class ServerConfig(BaseSettings):
     # Or env (server processes only): MINERU_API_TOKENS=jwt-1,jwt-2
     mineru_api_tokens: list[str] = Field(default_factory=list)
     mineru_api_base_url: str = Field(default="https://mineru.net")
+    mineru_api_protocol: Literal["v1", "legacy-v4"] = Field(default="v1")
+    mineru_tier: Literal["flash", "basic", "standard", "advanced"] = Field(default="standard")
+    # Legacy V4 only: this is never mapped to V1 tier.
     mineru_model_version: str = Field(default="vlm")
     mineru_language: str = Field(default="ch")
     mineru_is_ocr: bool = Field(default=False)

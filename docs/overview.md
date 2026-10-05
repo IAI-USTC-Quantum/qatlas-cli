@@ -53,7 +53,8 @@ qatlas auth      # 管理各 host 的 PAT / session token（login / status / tok
 qatlas paper     # 论文工作流：get markdown/images/metadata、status、mineru-lease，
                  #   目录检索 list / lookup，批量下载 fetch 与进度 jobs；
                  #   外部来源登记 source-register（title / authors / year 必填）；
-                 #   块级评论原件：pdf / source-list / parse-list / parse-json /
+                 #   固定来源 PDF：pdf；可定位续读的派生 JSON：read；
+                 #   块级评论原件：source-list / parse-list / parse-json /
                  #   block-list / block-get / block-image
 qatlas comments  # 块级讨论：list / show / create / reply / status / edit
 qatlas contrib   # 贡献者工作流：上传 PDF（contrib pdf）或本地跑 MinerU 再推送（contrib mineru）
@@ -86,6 +87,8 @@ qatlas search '"variable time amplitude amplification"' --no-agent --json
 qatlas match --arxiv 1010.4458 --json
 qatlas paper get metadata qa_…
 qatlas paper get markdown qa_…             # 默认 stdout；缓存未命中时由服务端抓取/解析
+qatlas paper pdf qa_… --version v2 -o paper.pdf  # 直接鉴权获取固定来源 PDF，不依赖先枚举 source
+qatlas paper read qa_… --limit 30000 --json     # 代理友好的派生正文、来源/revision 与续读游标
 qatlas paper source-list qa_… --json       # 原始 PDF source、版本来源和完整 hash
 qatlas paper parse-list qa_… --json        # 支持 originals API 的服务返回解析 revision
 qatlas paper parse-json qa_… REVISION --no-cache  # 固定 revision 的 JSON，默认 stdout
@@ -117,6 +120,99 @@ qatlas contrib mineru 10.1145/2090236.2090261 --zip mineru.zip --verify strict
 `--overwrite`。`contrib mineru ID` 的本地转换还需要用户已有的 MinerU 配置；
 通常的远程 Markdown 获取不需要本地 MinerU token。旧服务若缺 originals API，
 对应命令返回 unsupported（退出 `9`），仍可用既有 Markdown 获取路径。
+
+### 固定来源 PDF 与代理续读 JSON
+
+```bash
+qatlas paper pdf qa_… --source-id src_… -o paper.pdf
+qatlas paper pdf 0811.3171v2 --version v2 --no-cache -o paper-v2.pdf
+qatlas paper read qa_… --source-id src_… --revision REVISION --page 5 --block 12 --json
+qatlas paper read qa_… --limit 30000 -o first-window.json
+# 将响应 next_request.cursor 的字符串原样传回；不要改成“最新” revision：
+qatlas paper read qa_… --cursor 'CURSOR_FROM_NEXT_REQUEST' --json
+qatlas paper read qa_… --no-wait --json  # 返回异步状态和 operation.status_url，不主动轮询
+```
+
+- `paper pdf` 直接请求鉴权的 `GET /api/papers/{id}/pdf`，支持 `qa_`、arXiv、DOI
+  等服务端别名；`--source` 与 `--source-id` 同义，和 `--version` **互斥**。
+  显式 pin 无命中或存在歧义时由服务端拒绝，客户端不回退到其他 source/version。
+  不要求已有 source-list 记录，因此不会因旧 PDF 尚未登记 source 而阻断访问。
+- 从响应 `X-QAtlas-Source-Id`、`X-QAtlas-Source-Origin`、`X-QAtlas-Paper-Id` 和
+  `X-QAtlas-PDF-SHA256`（或 `X-QAtlas-Sha256`）取得来源与完整性信息。
+  所有身份均逐块计算 SHA-256，在校验完成前不输出任何 PDF 字节；大文件用临时
+  磁盘缓冲而非整文件常驻内存。错误/摘要不匹配时保留已有输出文件和已验证缓存。
+  别名可按响应的规范 `qa_` 身份复用内容寻址缓存；**缓存命中也先取得服务端当前
+  鉴权及 paper_access 放行响应**，不会用缓存绕过禁用、401 或 403。
+- PDF/read 均要求服务端 `paper_access.enabled: true` 与当前身份的读取权限。
+  禁用/资源缺失按服务端 404 详情报告，不把 PDF 当成永远 410 的废弃接口。
+  不切换账户、不改已有 token/config，也不自行向外部原始地址附带鉴权下载。
+- `paper read` 请求 `GET /api/papers/{id}/read`，stdout 默认就是完整 JSON，
+  `--json` 可显式标注；`-o FILE` 将同一 JSON 写入文件。保留 `paper_id`、
+  `source_id`、`revision`、`renderer`、`format`、`content`、`request_scope`、
+  `content_ranges`、`truncated`、`next_request`、`warnings` 及未来扩展字段。
+  页码/块序号为 **1-based**，`--block` 必须带 `--page`；这与旧 block-* 的
+  0-based `page_idx` / 原始 block index **不是同一套定位参数**。
+  `--limit` 是正文 Unicode 字符预算，1..100000（服务端默认 30000）。
+- 若 `truncated: true`，将 `next_request.cursor` 原样交给下一次 `--cursor`。
+  游标固定 paper/source/revision、Middle hash、renderer 与选择范围；客户端不
+  自行切段、重写定位或拼装“原始 JSON”。这份 JSON 是 **Middle 派生阅读视图**，
+  不是 MinerU content-list，也不是可复核的原始 Middle artifact；保留原件仍用
+  `paper parse-json ID REVISION`，该命令继续输出 hash 校验后的原始字节。
+- 未解析时响应 202，CLI 遵守 `Operation-Location` 和 `Retry-After`，轮询状态
+  queued/running，直到 ready/cached/done 后携带固定 source/revision 再取原请求。
+  failed/cooldown/unavailable、HTTP 错误或 `--max-wait` 超时只报错，不假装正文
+  已就绪。`--no-wait` 返回初始状态 JSON，并补入 `operation.status_url` 与
+  `retry_after`，便于外部代理自行接续；轮询 URL 必须仍在配置的服务端同源。
+  进度/来源说明只走 stderr；read 的进度/默认推断可用 `--quiet-progress` /
+  `--quiet-notes` 控制，PDF 的校验/缓存说明始终走 stderr。
+
+现有 `paper get markdown/images/figures/image` 同样支持新服务的 202 懒解析：
+使用同源状态位置、遵守 Retry-After、有界等待后携固定 source/revision 重取原资产；
+保留旧 cached/md_ready 状态兼容。各命令可用 `--no-wait` 返回异步 JSON，
+`--max-wait` / `--quiet-progress` 控制等待；figures 仍输出 JSON、图片/Markdown
+仍输出原字节。source origin 中 arXiv `vN` 是语义版本（arxiv:vN 或 arxiv:IDvN），
+**不是** S3VersionId；相同 PDF SHA 可共享 source ID，解析 revision 仍独立固定。
+
+### 贡献者 hosted MinerU V1：确切 PDF → 完整 ZIP
+
+`qatlas contrib mineru ID` 与队列/`--watch` 默认走 V1 上传工作流，不把受保护的
+claim URL 直接交给第三方。开启 gate 的 claim 含 source_id/pdf_requires_auth 与
+SHA，客户端只向配置的同源 QAtlas 携自己的鉴权下载 PDF，逐字节验证后才按
+uploads → PUT → complete/file.id → parse/jobs → poll → files/content 发送该确切字节。
+关闭 gate 时仅接受免鉴权的 arXiv 白名单来源，同样必须有完整 SHA，不跳过校验。
+
+```yaml
+mineru_api_base_url: https://mineru.net
+mineru_api_protocol: v1
+mineru_tier: standard
+# 使用用户已有 mineru_api_tokens；此处不写实际凭据。
+```
+
+```bash
+qatlas contrib mineru 0811.3171v2 --tier standard --max-wait 600
+qatlas contrib mineru --batch-size 10 --tier standard
+qatlas contrib mineru 0811.3171v2 --no-push  # 保留完整原ZIP，路径只在stderr报告
+```
+
+- 生产 hosted 根入口自动规范到 `/api`，custom API root 保持明确配置。V1 tier
+  flash/basic/standard/advanced 与 legacy model_version **不同**；不会把 vlm 等
+  模型名当成质量档位。既有 OCR bool 对应 V1 auto/ocr；language/formula/table
+  仅保留为 legacy 配置，不虚构其 V1 参数，命令明确提示。
+- 用户 QAtlas bearer 从不进入 provider；vendor bearer 只发其配置的 API origin；
+  PUT presign / 跨源结果下载无 bearer、cookie、`.netrc` 隐式凭据。API credential
+  请求不跟随跨源重定向，认证 PDF 重定向必须同源。
+- 单篇与队列均固定 source+SHA，一篇一个 V1 file-id job；等待包含 source/upload/
+  job/result 全流程，受 `--max-wait`、配置 timeout 与 lease 上界限制。confirmed
+  daily quota 才轮换 key，不重试结果 UNKNOWN 的提交；watch 遇 UNKNOWN 停止。
+  退出/超时释放 claim，未完成 provider job 可能仍运行，不自动当作取消或重提。
+- 获取和发送的是**整个原 ZIP**，里面所有 JSON、Markdown、图片、未知文件字节
+  不改写/不抽成 MD-only。CRC/大小守卫不改变原件；server 严格验证完整 Middle+MD
+  和 manifest 后发布**新 revision**。上传携 exact source_id/pdf_sha256/tier 与
+  fullZIP expected_sha256；overwrite 不修改不可变历史。
+- `--no-push` 保留完整 ZIP；服务端拒收、写前拒绝或结果不确定也保留 ZIP 供核对。
+  `--no-cache` 属于旧 V4，V1 没有对应字段，提示并不发送捏造参数。只有显式
+  `mineru_api_protocol: legacy-v4` / `--legacy-v4` 选择旧 URL 协议，受保护 URL
+  或旧不完整产物可能不兼容；独立 `qatlas parser` 的 legacy SDK 路径没有被冒充 V1。
 
 ### 登记外部论文来源（ePrint / 独立 PDF）
 

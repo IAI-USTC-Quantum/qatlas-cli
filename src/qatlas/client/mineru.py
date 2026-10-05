@@ -1,8 +1,11 @@
 """``qatlas contrib mineru`` — run MinerU parsing locally and push the result to the server.
 
-The contributor flow is arxiv-only: the server hands back an arxiv.org versioned
-URL (stable bytes — arxiv never mutates a published version) and we feed that URL
-to MinerU. The server **never** redistributes PDFs back to clients.
+The hosted production default is MinerU V1: fetch the claim's exact SHA-pinned
+PDF with same-origin QAtlas authentication, upload those bytes to the provider,
+submit a tier=standard file-id job, then retain/push the byte-exact full ZIP.
+QAtlas credentials never reach the provider, and provider bearer never reaches
+upload presigns/cross-origin output downloads. Legacy V4 is explicit opt-in,
+not an implicit mapping of model_version onto V1 tier.
 
 Modes::
 
@@ -28,26 +31,23 @@ Concurrency::
 
 PDF sha256 verification (since v0.9.0)::
 
-    The lease response carries the sha256 the server stored for that paper's
-    PDF (read from RustFS object metadata). We download the arxiv URL, hash
-    the bytes, compare to the server's hash, then pass the hash back on
-    upload-mineru via ``?pdf_sha256=<hex>``. The server cross-checks against
-    its own RustFS metadata one more time. A mismatch at either end aborts
-    the upload — better than silently uploading markdown derived from a
-    different PDF revision.
+    The lease pins the exact source PDF SHA/source_id. V1 fetches with QAtlas
+    auth only on the configured origin (or unauthenticated whitelisted arXiv
+    when gate-off claims use an external URL), verifies every byte before
+    vendor upload, then sends source_id/pdf_sha256 and complete ZIP SHA back
+    to QAtlas. The server rechecks the same frozen identity at publication.
 
-    Legacy objects (uploaded before v0.7.0) have no sha256 metadata; in that
-    case ``claim.pdf_sha256`` is empty and we skip verification (trust the
-    contributor + arxiv URL stability).
+    V1 refuses a missing/invalid source SHA rather than claiming unverified
+    success. The explicitly selected legacy V4 path retains older semantics,
+    with a warning that its output/protected URLs may be incompatible.
 
 Push path (since v0.8.0)::
 
-    We send the *entire* MinerU result zip to ``POST upload-mineru`` rather
-    than extracting just ``full.md`` ourselves. The server then unzips, writes
-    ``full.md`` to the markdown bucket, and writes every ``images/<name>``
-    to the images bucket. Pre-v0.8.0 the client did the extraction and only
-    pushed the .md, silently dropping every image — a regression that's now
-    fixed.
+    We send the *entire byte-exact* result ZIP: all original JSON, Markdown,
+    images and unknown files stay in it, never a Markdown-only extraction.
+    Server strict intake validates supported Middle+Markdown, preserves all
+    producer paths/bytes, publishes manifest last and a new immutable revision.
+    --no-push retains the full ZIP; unknown/rejected uploads retain evidence.
 """
 
 from __future__ import annotations
@@ -450,14 +450,15 @@ def _upload_mineru_zip(
     verify: bool,
     headers: dict[str, str],
     pdf_sha256: Optional[str] = None,
+    source_id: Optional[str] = None,
+    tier: Optional[str] = None,
 ) -> tuple[bool, Any]:
     """POST the whole MinerU zip to /api/papers/{id}/upload-mineru.
 
-    The server extracts ``full.md`` and every ``images/<name>`` and writes
-    them to their respective per-kind buckets (markdown / images) under the
-    paper's canonical key. Conditional create-only PUT semantics apply per
-    object so multiple contributors racing on the same paper still get
-    consistent state.
+    Server intake retains all original bundle members, requires supported
+    Middle+Markdown, verifies exact PDF and member hashes, then publishes a
+    new complete immutable revision through PG. overwrite never changes an
+    existing revision; source_id/tier/full ZIP SHA accompany V1 contributions.
 
     ``pdf_sha256`` (since v0.9.0) is the sha256 the *client* computed from
     the arxiv PDF it just fetched. The server cross-checks against its own
@@ -469,6 +470,16 @@ def _upload_mineru_zip(
         params["overwrite"] = "true"
     if pdf_sha256:
         params["pdf_sha256"] = pdf_sha256
+    if source_id:
+        params["source_id"] = source_id
+    if tier:
+        params["tier"] = tier
+    if source_id or tier:
+        digest = hashlib.sha256()
+        with zip_path.open("rb") as source_file:
+            for chunk in iter(lambda: source_file.read(1 << 16), b""):
+                digest.update(chunk)
+        params["expected_sha256"] = digest.hexdigest()
     headers = {**headers, **client_version_headers()}
     check_server_before_write(
         base_url, headers=headers, timeout=request_timeout, verify=verify
@@ -490,6 +501,13 @@ def _upload_mineru_zip(
     return True, resp.json()
 
 
+def _use_v1(config: ServerConfig) -> bool:
+    protocol = getattr(config, "mineru_api_protocol", "v1")
+    if protocol not in {"v1", "legacy-v4"}:
+        raise ValueError("mineru_api_protocol must be v1 or explicitly legacy-v4")
+    return protocol == "v1"
+
+
 def _process_one(
     args: argparse.Namespace,
     base_url: str,
@@ -499,7 +517,12 @@ def _process_one(
     headers: dict[str, str],
     key_ring: Optional[KeyRing] = None,
 ) -> int:
-    """Process exactly one arxiv_id. Returns 0 on success/skip, 1 on hard error."""
+    """Process exactly one source; V1 is the production hosted default."""
+    if _use_v1(config):
+        from qatlas.client import mineru_contribution
+
+        return mineru_contribution.process(sys.modules[__name__], args, base_url, config,
+            arxiv_id, verify, headers, key_ring)
     _print_err(f"--- {arxiv_id} ---")
     claim, skip = _claim_one(
         base_url,
@@ -673,6 +696,11 @@ def _drain_queue_once(
     Returns a :class:`_BatchOutcome` so the caller (watch loop) can react
     to ``daily_limit_hit`` by sleeping until next 00:01 local time.
     """
+    if _use_v1(config):
+        from qatlas.client import mineru_contribution
+
+        return mineru_contribution.drain(sys.modules[__name__], args, base_url, config,
+            verify, headers, key_ring)
     batch_size = max(1, min(int(args.batch_size), MAX_BATCH_SIZE))
 
     list_resp = requests.get(
@@ -1170,6 +1198,16 @@ def _seconds_until_next_daily_run() -> float:
 
 def cmd_mineru(args: argparse.Namespace) -> int:
     config = ServerConfig.from_env()
+    if getattr(args, "legacy_v4", False):
+        config.mineru_api_protocol = "legacy-v4"
+    if getattr(args, "tier", None):
+        config.mineru_tier = args.tier
+    if _use_v1(config):
+        _print_err(f"MinerU hosted V1 tier={config.mineru_tier}; legacy model_version/language/formula/table settings are not V1 parameters")
+        if args.no_cache:
+            _print_err("warning: --no-cache is a legacy V4 option; V1 API does not expose that flag, it is not sent")
+    else:
+        _print_err("warning: explicit legacy-v4 protocol selected; protected claim URLs are not public provider URLs, and legacy output may fail complete Middle intake")
     if not config.mineru_api_token:
         _print_err(
             "mineru_api_tokens must be set in your config.yaml "
@@ -1281,9 +1319,9 @@ def build_parser(prog: str = "qatlas contrib mineru") -> argparse.ArgumentParser
         type=int,
         default=MAX_BATCH_SIZE,
         help=(
-            f"Queue mode only: max papers per MinerU batch (default {MAX_BATCH_SIZE}, "
-            f"hard cap {MAX_BATCH_SIZE} = MinerU's per-batch limit). Smaller batches "
-            "release per-paper failures sooner but waste round-trips."
+            f"Queue admission limit (default/max {MAX_BATCH_SIZE}). "
+            "V1 runs one exact-source file-id job per paper within a shared "
+            "bounded wait/lease window; legacy V4 uses its batch API."
         ),
     )
     parser.add_argument(
@@ -1305,6 +1343,12 @@ def build_parser(prog: str = "qatlas contrib mineru") -> argparse.ArgumentParser
             "the rest of the batch); only daily-limit short-circuits."
         ),
     )
+    parser.add_argument("--tier", choices=["flash", "basic", "standard", "advanced"], default=None,
+        help="MinerU V1 quality tier (config default standard); never derived from legacy model_version")
+    parser.add_argument("--legacy-v4", action="store_true",
+        help="Explicitly use legacy V4 URL protocol; protected claim locators and strict complete output may be incompatible")
+    parser.add_argument("--max-wait", type=float, default=None,
+        help="V1 source/upload/job/result wall-time budget in seconds; also bounded by claim lease")
     parser.add_argument(
         "--ttl-seconds",
         type=int,
@@ -1317,12 +1361,12 @@ def build_parser(prog: str = "qatlas contrib mineru") -> argparse.ArgumentParser
     parser.add_argument(
         "--no-cache",
         action="store_true",
-        help="Ask MinerU to bypass its server-side cache for this task.",
+        help="Legacy V4 cache bypass; V1 has no such API parameter and warns rather than inventing one.",
     )
     parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="Replace existing markdown / images on the server (rare; claim only succeeds when no md exists).",
+        help="Legacy input retained; new server reuploads create a new revision, never mutate immutable history.",
     )
     parser.add_argument(
         "--no-push",

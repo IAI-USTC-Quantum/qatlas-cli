@@ -58,6 +58,7 @@ def _make_config() -> Any:
     cfg = MagicMock()
     cfg.mineru_api_token = "mineru-tok"
     cfg.mineru_api_base_url = "https://mineru.example.com"
+    cfg.mineru_api_protocol = "legacy-v4"  # fixtures explicitly retain old V4 orchestration
     cfg.mineru_model_version = "vlm"
     cfg.mineru_language = "ch"
     cfg.mineru_enable_formula = True

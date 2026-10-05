@@ -386,7 +386,7 @@ def test_upload_preflight_refusal_releases_acquired_lease(monkeypatch, tmp_path)
 
     monkeypatch.setattr(mineru, "check_server_before_write", track_refusal)
     with pytest.raises(SystemExit) as exc:
-        mineru._process_one(args, BASE, None, "2501.00010v1", False, HEADERS)
+        mineru._process_one(args, BASE, SimpleNamespace(mineru_api_protocol="legacy-v4"), "2501.00010v1", False, HEADERS)
     assert exc.value.code == 4 and exc.value is refused[0]
     assert get.call_count == 2
     # The only POST was the lease acquisition, never the upload.

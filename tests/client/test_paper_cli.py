@@ -490,12 +490,12 @@ def test_main_dispatches_get_metadata(capsys):
 
 
 # ---------------------------------------------------------------------------
-# `paper get pdf` removal + `paper get images` (PDF delivery disabled)
+# `paper get pdf` stays absent; direct PDF delivery uses `paper pdf`
 # ---------------------------------------------------------------------------
 
 
 def test_get_pdf_subcommand_removed(capsys):
-    """`qatlas paper get pdf` no longer exists — the server answers 410."""
+    """PDF uses `qatlas paper pdf`; the nested legacy command stays absent."""
     rc = cli.main(["get", "pdf", "0811.3171v3"])
     assert rc == 2
     assert "unknown 'paper get' subcommand" in capsys.readouterr().err

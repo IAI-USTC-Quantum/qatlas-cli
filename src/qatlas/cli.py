@@ -35,7 +35,7 @@ COMMANDS: Mapping[str, Command] = {
     ),
     "paper": Command(
         "qatlas.client.paper",
-        "Paper workflows: get markdown/images/figures/image/metadata, status (single or batch), list, lookup, batch fetch, downloader jobs; originals/blocks for block-level comments (pdf, parse-list, parse-json, block-list, block-get, block-image)",
+        "Paper workflows: authenticated source-pinned pdf, resumable JSON read, get markdown/images/figures/image/metadata, status (single or batch), list, lookup, batch fetch, downloader jobs; originals/blocks for block-level comments (parse-list, parse-json, block-list, block-get, block-image)",
     ),
     "comments": Command(
         "qatlas.client.comments",

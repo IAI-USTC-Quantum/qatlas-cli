@@ -38,6 +38,7 @@ import fcntl
 import hashlib
 import os
 import re
+import shutil
 import sys
 import tempfile
 import time
@@ -267,6 +268,122 @@ def cached_download(
         if log:
             log("warning: cache lock unavailable; downloading without cache")
         return _download(), False
+
+
+def verified_response_to_output(
+    response: Any,
+    *,
+    sha256: str,
+    output: str | None,
+    base_url: str,
+    paper_id: str | None,
+    force_refresh: bool = False,
+    use_cache: bool = True,
+    log: Callable[[str], None] | None = None,
+) -> None:
+    """Verify a streamed PDF before emitting any bytes, using bounded memory.
+
+    The caller first obtains an authenticated, paper-access-gated response and
+    validates its source/hash headers. Even cache hits must pass that fresh
+    authorization check. Aliases receive exactly the same SHA check as qa_ ids.
+    """
+    if not _SHA_RE.fullmatch(sha256):
+        raise blockapi.ApiError(
+            f"pdf: server reported invalid sha256 {sha256!r}",
+            kind="bad_content", exit_code=blockapi.EXIT_TRANSPORT,
+        )
+    final = None
+    if use_cache and paper_id and _QA_ID_RE.fullmatch(paper_id):
+        final = asset_cache_path(resolve_cache_root(), base_url, paper_id, "pdf", sha256)
+
+    def emit(source: Any) -> None:
+        source.seek(0)
+        if output is None or output == "-":
+            shutil.copyfileobj(source, sys.stdout.buffer, length=1 << 16)
+            sys.stdout.buffer.flush()
+        else:
+            dest = Path(output).expanduser()
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with dest.open("wb") as target:
+                shutil.copyfileobj(source, target, length=1 << 16)
+
+    def cached() -> bool:
+        if final is None or force_refresh or not final.is_file():
+            return False
+        with final.open("rb") as source:
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: source.read(1 << 16), b""):
+                digest.update(chunk)
+            if digest.hexdigest() != sha256:
+                if log:
+                    log(f"cache entry failed hash check, ignoring: {final}")
+                return False
+            emit(source)
+        if log:
+            log(f"cache hit (server authorized): {final}")
+        return True
+
+    def download() -> None:
+        # Never emit an unverified prefix to stdout or overwrite an output file
+        # when the transfer fails/hash mismatches. Larger files spill to disk.
+        with tempfile.SpooledTemporaryFile(max_size=1 << 20, mode="w+b") as spool:
+            digest = hashlib.sha256()
+            size = 0
+            for chunk in response.iter_content(chunk_size=1 << 16):
+                if chunk:
+                    digest.update(chunk)
+                    spool.write(chunk)
+                    size += len(chunk)
+            actual = digest.hexdigest()
+            if actual != sha256:
+                raise blockapi.ApiError(
+                    f"pdf: downloaded bytes hash to {actual}, expected {sha256} — "
+                    "asset NOT cached and NOT emitted (server/corruption mismatch)",
+                    kind="bad_content", exit_code=blockapi.EXIT_TRANSPORT,
+                )
+            if final is not None:
+                final.parent.mkdir(parents=True, exist_ok=True)
+                fd, tmp_name = tempfile.mkstemp(prefix=f".{final.name}.", suffix=".tmp", dir=final.parent)
+                try:
+                    spool.seek(0)
+                    with os.fdopen(fd, "wb") as target:
+                        shutil.copyfileobj(spool, target, length=1 << 16)
+                        target.flush()
+                        os.fsync(target.fileno())
+                    os.replace(tmp_name, final)
+                except BaseException:
+                    try:
+                        os.unlink(tmp_name)
+                    except OSError:
+                        pass
+                    raise
+            if log:
+                log(f"downloaded {size} bytes (sha256 verified: {sha256})")
+            emit(spool)
+
+    try:
+        if cached():
+            return
+        if final is None:
+            download()
+            return
+        # A failed lock must not cause a duplicate network download/output.
+        lock = _DirLock(final.with_suffix(final.suffix + ".lock"))
+        try:
+            lock.__enter__()
+        except (TimeoutError, OSError):
+            if log:
+                log("warning: cache lock unavailable; downloading without cache")
+            final = None
+            download()
+            return
+        try:
+            if not cached():
+                download()
+        finally:
+            lock.__exit__()
+    finally:
+        response.close()
 
 
 def stream_out(data: bytes, output: str | None, *, binary_stdout_ok: bool = True) -> None:

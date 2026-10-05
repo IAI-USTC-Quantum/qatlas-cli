@@ -158,7 +158,7 @@ def test_mineru_watch_stops_after_caught_unknown_instead_of_resubmitting(
     with compatibility_server(drop="write") as server:
         isolated_client(server.base_url)
         config = SimpleNamespace(mineru_api_token="fixture", mineru_api_tokens=["fixture"],
-                                 mineru_api_base_url=server.base_url)
+                                 mineru_api_base_url=server.base_url, mineru_api_protocol="legacy-v4")
         monkeypatch.setattr(mineru.ServerConfig, "from_env", lambda: config)
         monkeypatch.setattr(mineru, "base_url_from_args", lambda args: server.base_url)
         monkeypatch.setattr(mineru, "request_verify", lambda args: True)
