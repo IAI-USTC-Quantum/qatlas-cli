@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.38.0rc1 (2026-10-05)
+
+### Feat
+
+- **paper**: add verified frozen PDF and resumable content access
+
 ## v0.37.0rc3 (2026-10-05)
 
 ### Feat
