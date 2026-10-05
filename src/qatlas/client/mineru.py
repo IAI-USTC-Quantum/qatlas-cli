@@ -68,6 +68,7 @@ from urllib.parse import urlparse
 
 import requests
 
+from qatlas._http import unknown_write_count, write_request
 from qatlas.client._common import (
     add_common_http_args,
     auth_headers,
@@ -247,7 +248,8 @@ def _claim_one(
         )
         resp = None
         for i, url in enumerate(urls):
-            resp = requests.post(
+            resp = write_request(
+                requests.post,
                 url,
                 params=params or None,
                 headers=headers,
@@ -258,7 +260,10 @@ def _claim_one(
             if resp.status_code != 404 or i == len(urls) - 1:
                 break
     except requests.RequestException as exc:
-        return None, f"claim request errored: {exc}"
+        # Keep the existing return/exit contract, but include the outcome note
+        # for callers that consume skip_reason instead of stderr.
+        notes = " ".join(getattr(exc, "__notes__", []))
+        return None, f"claim request errored: {exc}" + (f" — {notes}" if notes else "")
     assert resp is not None
     if resp.status_code == 201:
         return resp.json(), None
@@ -293,7 +298,8 @@ def _release_claim(
     headers = {**headers, **client_version_headers()}
     try:
         for i, url in enumerate(urls):
-            resp = requests.delete(
+            resp = write_request(
+                requests.delete,
                 url,
                 headers=headers,
                 timeout=request_timeout,
@@ -469,7 +475,8 @@ def _upload_mineru_zip(
     )
     with zip_path.open("rb") as fh:
         files = {"mineru_zip": (zip_path.name, fh, "application/zip")}
-        resp = requests.post(
+        resp = write_request(
+            requests.post,
             f"{base_url}/api/papers/{arxiv_id}/upload-mineru",
             files=files,
             params=params,
@@ -1197,7 +1204,14 @@ def cmd_mineru(args: argparse.Namespace) -> int:
         )
         consecutive_empty = 0
         while not _SHUTDOWN_REQUESTED:
+            unknown_before = unknown_write_count()
             outcome = _drain_queue_once(args, base_url, config, verify, headers, key_ring=key_ring)
+            if unknown_write_count() != unknown_before:
+                _print_err(
+                    "UNKNOWN write outcome: stopping watch without another queue pass. "
+                    "Check server/task state before manually resuming."
+                )
+                return 1
             if outcome.daily_limit_hit:
                 # Quota burnt — no point hammering MinerU until reset.
                 sleep_s = _seconds_until_next_daily_run()

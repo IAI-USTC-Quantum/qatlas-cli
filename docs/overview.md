@@ -52,6 +52,7 @@ qatlas config    # 管理用户级配置文件（~/.config/qatlas/config.yaml）
 qatlas auth      # 管理各 host 的 PAT / session token（login / status / token / logout）
 qatlas paper     # 论文工作流：get markdown/images/metadata、status、mineru-lease，
                  #   目录检索 list / lookup，批量下载 fetch 与进度 jobs；
+                 #   外部来源登记 source-register（title / authors / year 必填）；
                  #   块级评论原件：pdf / source-list / parse-list / parse-json /
                  #   block-list / block-get / block-image
 qatlas comments  # 块级讨论：list / show / create / reply / status / edit
@@ -117,6 +118,35 @@ qatlas contrib mineru 10.1145/2090236.2090261 --zip mineru.zip --verify strict
 通常的远程 Markdown 获取不需要本地 MinerU token。旧服务若缺 originals API，
 对应命令返回 unsupported（退出 `9`），仍可用既有 Markdown 获取路径。
 
+### 登记外部论文来源（ePrint / 独立 PDF）
+
+无 DOI/arXiv 身份的合法外部 PDF 使用独立登记命令，不伪造 DOI，也不把
+手工元数据混入 downloader enqueue：
+
+```bash
+qatlas paper source-register https://eprint.iacr.org/2025/1234 \
+  --title "Paper title" --author "Alice Example" --author "Bob Example" \
+  --year 2025 --json
+# 普通 HTTPS URL 必须直接返回 PDF；ePrint 支持其论文页或 PDF URL。
+```
+
+- 当前账户需 `papers:write`。标题、至少一个作者、年份必填；`--author NAME`
+  可重复。客户端在任何 HTTP 请求之前检查非空、标题最多 2000 UTF-8 字节、
+  作者 1..100 位且每位最多 500 UTF-8 字节、年份 1..9999。
+- 请求是 `POST /api/papers/source-register`，仅发送
+  `{source_url,title,authors:[string],year:int}`；复用写前版本检查及确定性
+  `Idempotency-Key`，不自动重试。URL 安全性、PDF 获取与标题/来源验证由服务端
+  实施；客户端不把外部 URL 转成 DOI，不自行按标题合并论文。
+- `--json` 完整保留服务器响应的 `paper_id`、`created`、`source` 对象、
+  `source_url`、可选 `external_id` 及未来扩展字段，不另造身份字段。
+  记录返回的 `source.source_id` 与 `source.sha256` 后，可用
+  `qatlas paper pdf qa_… --source src_… --no-cache -o paper.pdf` 获取固定原件。
+- 同来源身份与同 PDF hash 的幂等性由服务端保证；来源 URL 内容变化可以产生
+  新 source，不能把同一请求正文的幂等键等同于无限期重放旧 PDF 的保证。
+  写请求丢响应会提示 **UNKNOWN**，先核对服务端 `source-list` / 元数据再决定
+  是否重新提交。这不是下载/转换队列接口；需要正文时另用既有获取命令。
+- 未实现此登记端点的旧服务退出 `9`（unsupported）；不回退到另一个写接口。
+
 ### 块级评论（paper 原件 / 块 / 讨论）
 
 `qatlas paper pdf|source-list|parse-list|parse-json|block-list|block-get|block-image`
@@ -136,9 +166,11 @@ qatlas comments status <discussion_id> confirmed --reason "已对照原图确认
 
 要点：
 
-- 写操作自动携带确定性幂等键（SHA-256(method|path|body)），超时后重发同一
-  请求会回放原结果，不会重复发帖；`edit` 自动取当前 revision 做 `If-Match`
-  CAS，过期修订按 409（退出码 6）拒绝。
+- 评论写操作自动携带确定性幂等键（SHA-256(method|path|body)），发送后丢失
+  响应会明确提示结果可能为 **UNKNOWN**，不会自动重试；重发相同正文、方法
+  和路径会回放原结果，不要通过改正文/换键来重复发帖。写前版本探测失败则
+  明确提示**请求未发送**，不会误报 UNKNOWN。`edit` 自动取当前 revision 做
+  `If-Match` CAS，过期修订按 409（退出码 6）拒绝。
 - 正文上限 20,000 Unicode 字符（客户端镜像检查，超限退出码 2 并提示拆分）；
   分页 per_page 默认 20、上限 100，游标翻页。
 - 原件缓存按「服务来源 + qa_ + 固定 sha256」内容寻址，配置项 `cache_dir`
@@ -195,7 +227,24 @@ qatlas-cli 与服务端 qatlasd **各自独立演进版本号**，兼容协议�
 - 服务端更新且为写：探测阶段硬失败（exit code 4），提示 `uv tool upgrade qatlas-cli`，**不发送写请求**。探测失败（404 除外）同样不发送。请求已发出后版本变化只警告，不表示写入被拒绝或未发出；
 - 服务端更新且为读：stderr 警告一次，继续执行；
 - 客户端更新：stderr 警告一次（提示运维方升级 qatlasd），继续执行；
-- 响应无版本头或版本无法解析：跳过协商；info 接口 404 视为老服务端，仍允许写。
+- 响应无版本头或版本无法解析：跳过协商；info 接口 404 视为旧接口，但仍检查
+  版本头，已知更新的服务端不能借 404 绕过写前拒绝。探测不跟随重定向。
+
+所有实际写请求（fetch、插件显式 `write=True`、lease、贡献上传、MinerU
+提交/上传/清理、设备认证）发送阶段发生传输异常时都会在 stderr 明确提示
+结果为 **UNKNOWN**；异常类型和既有退出码保留，不自动重试。`paper fetch`
+和通用插件写没有客户端幂等回放保证，不能把网络失败等同未写入，也不能把
+重复 enqueue 说成安全重试；先核对 jobs / 元数据等服务端状态。版本 preflight
+失败仍只说**未发送**，不会提示 UNKNOWN。设备认证和内部 lease 清理仍沿用
+既有无版本 preflight 流程；清理继续 best-effort，不遮蔽原异常。设备 token
+只对服务端明确返回的 pending / slow_down 继续轮询，丢失 token 响应时不盲目重试登录。
+MinerU `--watch` 捕获到 UNKNOWN 后停止当前监视并退出 `1`，不会在下一轮
+重新提交同一队列；读状态轮询和明确的服务端 quota/backoff 响应不受影响。
+
+服务端推断的 ID / 版本默认值通过 `X-QAtlas-Defaults-Applied` 在 stderr 显示，
+`--quiet-notes` 可关闭。新服务端使用 ASCII 头；CLI 也兼容旧服务端的 UTF-8
+箭头字节，仅修复已知箭头乱码，不猜测或重新解码其他合法 Latin-1 内容，
+不修改响应正文或 JSON stdout。
 
 完整策略见主仓文档：
 [QuantumAtlas 版本与兼容策略](https://github.com/IAI-USTC-Quantum/QuantumAtlas/blob/main/docsite/dev/versioning.rst)。

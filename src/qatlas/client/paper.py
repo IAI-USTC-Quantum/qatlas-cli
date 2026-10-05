@@ -9,6 +9,7 @@ Subcommands::
     qatlas paper list         [--has-md true] [--status …] [-q …] [--json]
     qatlas paper lookup       REF... [--json]
     qatlas paper fetch        ID|DOI|URL... [--file FILE] [--json]
+    qatlas paper source-register URL --title TITLE --author NAME --year YYYY [--json]
     qatlas paper jobs         [--remote] [--watch] [--json]
     qatlas paper mineru-lease ID [--ttl-seconds N]
 
@@ -62,6 +63,7 @@ from typing import Any
 
 import requests
 
+from qatlas._http import write_request
 from qatlas.client._common import (
     add_common_http_args,
     auth_headers,
@@ -107,7 +109,10 @@ def _print_notes(response: requests.Response, *, quiet: bool) -> None:
     if requested and resolved and requested != resolved:
         bits.append(f"{requested} → {resolved}")
     if defaults:
-        bits.append(defaults)
+        # Legacy servers sent UTF-8 arrows in this header; requests decodes
+        # header bytes as Latin-1. Repair only that known sequence, not the
+        # whole field: genuine Latin-1 text must not be reinterpreted as UTF-8.
+        bits.append(defaults.replace("\xe2\x86\x92", "→"))
     print(f"Note (server applied defaults): {'; '.join(bits)}", file=sys.stderr)
 
 
@@ -691,7 +696,8 @@ def cmd_mineru_lease(args: argparse.Namespace) -> int:
     check_server_before_write(
         base_url, headers=headers, timeout=args.request_timeout, verify=verify
     )
-    resp = requests.post(
+    resp = write_request(
+        requests.post,
         f"{base_url}/api/v1/papers/{arxiv_id}/mineru-lease",
         params=params or None,
         headers=headers,
@@ -718,7 +724,8 @@ def cmd_release_mineru_lease(args: argparse.Namespace) -> int:
     check_server_before_write(
         base_url, headers=headers, timeout=args.request_timeout, verify=verify
     )
-    resp = requests.delete(
+    resp = write_request(
+        requests.delete,
         f"{base_url}/api/v1/papers/{arxiv_id}/mineru-lease/{claim_id}",
         headers=headers,
         verify=verify,
@@ -1007,6 +1014,7 @@ Usage:
   qatlas paper list         [--has-md true] [--status …] [-q …] [--json]
   qatlas paper lookup       arxiv:ID | doi:DOI | openalex:ID ... [--json]
   qatlas paper fetch        ID|DOI|URL... [--file FILE] [--json]
+  qatlas paper source-register URL --title TITLE --author NAME [--author NAME ...] --year YYYY [--json]
   qatlas paper jobs         [--remote] [--watch] [--json]
   qatlas paper mineru-lease ID_OR_DOI [--ttl-seconds N]
   qatlas paper mineru-lease release ID_OR_DOI CLAIM_ID
@@ -1078,6 +1086,10 @@ def main(argv: list[str] | None = None) -> int:
         parser = build_fetch_parser()
     elif subcommand == "jobs":
         parser = build_jobs_parser()
+    elif subcommand == "source-register":
+        from qatlas.client import external_sources
+
+        return external_sources.main(argv)
     elif subcommand in {"mineru-lease", "claim"}:
         prog_base = "qatlas paper mineru-lease" if subcommand == "mineru-lease" else "qatlas paper claim"
         if argv and argv[0] == "release":

@@ -136,10 +136,11 @@ class ApiError(Exception):
 def idempotency_key(method: str, path: str, body: str) -> str:
     """Compute the §12.2 ``Idempotency-Key`` header value.
 
-    Deterministic: SHA-256 over ``METHOD + path + body``. Retrying the
-    exact same logical request re-derives the same key, so the server
-    replays the original result instead of double-posting. A *changed*
-    body under the same key is a server-side 409 by contract.
+    Deterministic: SHA-256 over ``METHOD + path + body``. Resubmitting the
+    exact same logical request re-derives the same key. Comment endpoints
+    replay the original result and reject a changed body under the same key
+    with 409; other endpoints, including source registration, have their own
+    idempotency contracts. This helper does not retry or guarantee replay.
     """
     digest = hashlib.sha256(f"{method.upper()}|{path}|{body}".encode("utf-8"))
     return digest.hexdigest()
@@ -192,6 +193,7 @@ def _error_from_response(
     *,
     what: str,
     write: bool,
+    url_path: str = "",
 ) -> ApiError:
     """Map an HTTP error response onto the structured ApiError table."""
     body = _parse_error_body(resp)
@@ -199,6 +201,7 @@ def _error_from_response(
     if isinstance(body, dict):
         detail = str(body.get("detail") or body.get("error") or "")
     status = resp.status_code
+    source_registration = url_path == "/api/papers/source-register"
 
     if status in _STATUS_EXIT:
         kind = {
@@ -216,6 +219,8 @@ def _error_from_response(
             )
         elif status == 403 and write:
             hint = (
+                "source registration requires the papers:write scope"
+                if source_registration else
                 "writing comments requires a user PAT/session with the "
                 "comments:write scope (system PATs are read-only)"
             )
@@ -232,7 +237,17 @@ def _error_from_response(
             hint=hint,
         )
 
-    if _looks_like_endpoint_missing(resp):
+    # Registration has no resource-id path segment; its 404 is a missing route,
+    # including PocketBase's JSON 404 envelope (upstream PDF errors are 422).
+    if _looks_like_endpoint_missing(resp) or (source_registration and status == 404):
+        if source_registration:
+            return ApiError(
+                f"{what} failed: the server does not implement external source "
+                f"registration (HTTP {status})",
+                kind="unsupported", exit_code=EXIT_UNSUPPORTED,
+                status=status, body=body,
+                hint="ask the server operator to upgrade qatlasd for source registration",
+            )
         return ApiError(
             f"{what} failed: the server does not implement the "
             f"block-comments endpoints (HTTP {status})",
@@ -290,8 +305,8 @@ def _request(
         headers["Content-Type"] = "application/json"
         payload = json.dumps(json_body, ensure_ascii=False)
         if write:
-            # §12.2: deterministic key derived from the exact request so
-            # timeouts can be retried safely (server replays the result).
+            # Deterministic key for the exact request. Replay guarantees
+            # belong to each server endpoint; never automatically retry.
             headers["Idempotency-Key"] = idempotency_key(method, url_path, payload)
     else:
         payload = None
@@ -299,11 +314,14 @@ def _request(
     verify = request_verify(args)
     url = f"{base_url.rstrip('/')}{url_path}"
     session = http_session()
+    request_started = False
     try:
         if write:
             check_server_before_write(
                 base_url, headers=headers, timeout=args.request_timeout, verify=verify
             )
+        # Only failures after this point can have an ambiguous write outcome.
+        request_started = True
         resp = session.request(
             method,
             url,
@@ -316,22 +334,27 @@ def _request(
             allow_redirects=True,
         )
     except requests.RequestException as exc:
+        hint = None
+        if write:
+            if not request_started:
+                hint = "Write request was not sent; resolve the preflight failure first."
+            else:
+                hint = (
+                    "Write result is UNKNOWN — the request may have reached the "
+                    "server. No automatic retry was attempted. The same method, "
+                    "path and body re-derive the same Idempotency-Key; check server "
+                    "state and the endpoint's idempotency contract before resubmitting. "
+                    "Do not assume failure and double-submit different content."
+                )
         raise ApiError(
             f"{what} failed: {exc}",
             kind="transport",
             exit_code=EXIT_TRANSPORT,
-            hint=(
-                "for writes the result may be UNKNOWN — the request may have "
-                "reached the server. Retrying is safe (the same body re-derives "
-                "the same Idempotency-Key and the server replays the original "
-                "result); do not assume failure and double-submit different content."
-                if write
-                else None
-            ),
+            hint=hint,
         ) from exc
-    check_response_version(resp, write=write)
+    check_response_version(resp, write=write, request_sent=True)
     if not 200 <= resp.status_code < 300:
-        raise _error_from_response(resp, what=what, write=write)
+        raise _error_from_response(resp, what=what, write=write, url_path=url_path)
     return resp
 
 

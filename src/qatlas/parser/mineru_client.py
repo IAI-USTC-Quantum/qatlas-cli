@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import requests
 
+from qatlas._http import write_request
+
 
 # MAX_BATCH_SIZE is MinerU's hard limit on files per batch — keep in sync
 # with Go-side internal/mineru.MaxBatchSize. /api/v4/extract/task/batch
@@ -305,7 +307,8 @@ class MinerUClient:
         if data_id:
             payload["data_id"] = data_id
 
-        response = self.session.post(
+        response = write_request(
+            self.session.post,
             f"{self.base_url}/api/v4/extract/task",
             json=payload,
             headers={"Content-Type": "application/json"},
@@ -357,7 +360,8 @@ class MinerUClient:
             "no_cache": no_cache,
         }
 
-        response = self.session.post(
+        response = write_request(
+            self.session.post,
             f"{self.base_url}/api/v4/extract/task/batch",
             json=payload,
             headers={"Content-Type": "application/json"},

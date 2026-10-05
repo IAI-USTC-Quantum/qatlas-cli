@@ -143,32 +143,32 @@ def test_run_cli_maps_api_error_to_exit_code(capsys):
     assert "nope" in err
 
 
-def test_transport_error_on_write_mentions_unknown_result():
+def test_transport_error_on_write_mentions_unknown_result(monkeypatch):
     import requests as _requests
+    from unittest.mock import Mock
 
-    def boom(args):
-        raise _requests.ConnectionError("reset")
-
-    # _request wraps RequestException into ApiError with the write hint.
-    args = _args()
-    args.request_timeout = 1.0
-    caught = None
-    try:
+    # The probe must succeed; a closed port only tests an unsent preflight.
+    probe = Mock(return_value=make_response(200, json_body={}))
+    session = Mock()
+    session.request.side_effect = _requests.ConnectionError("write response lost")
+    monkeypatch.setattr(_requests, "get", probe)
+    monkeypatch.setattr(blockapi, "http_session", lambda: session)
+    with pytest.raises(blockapi.ApiError) as exc:
         blockapi._request(
-            args,
+            _args(),
             "POST",
             "/api/papers/qa_x/discussions",
             what="create",
             json_body={"body": "hi"},
             write=True,
-            base_url="http://127.0.0.1:1",  # nothing listens; loopback-safe
+            base_url="http://server.test",
         )
-    except blockapi.ApiError as exc:
-        caught = exc
-    assert caught is not None
-    assert caught.kind == "transport"
-    assert "UNKNOWN" in (caught.hint or "")
-    assert "Idempotency-Key" in (caught.hint or "")
+    probe.assert_called_once()
+    session.request.assert_called_once()
+    assert exc.value.kind == "transport"
+    assert "UNKNOWN" in (exc.value.hint or "")
+    assert "Idempotency-Key" in (exc.value.hint or "")
+    assert "was not sent" not in exc.value.render()
 
 
 def test_get_json_rejects_non_json_2xx():
