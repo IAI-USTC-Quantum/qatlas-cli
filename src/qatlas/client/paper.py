@@ -107,7 +107,10 @@ def _print_notes(response: requests.Response, *, quiet: bool) -> None:
     if requested and resolved and requested != resolved:
         bits.append(f"{requested} → {resolved}")
     if defaults:
-        bits.append(defaults)
+        # Legacy servers sent UTF-8 arrows in this header; requests decodes
+        # header bytes as Latin-1. Repair only that known sequence, not the
+        # whole field: genuine Latin-1 text must not be reinterpreted as UTF-8.
+        bits.append(defaults.replace("\xe2\x86\x92", "→"))
     print(f"Note (server applied defaults): {'; '.join(bits)}", file=sys.stderr)
 
 

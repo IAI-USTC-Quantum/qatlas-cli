@@ -197,6 +197,11 @@ qatlas-cli 与服务端 qatlasd **各自独立演进版本号**，兼容协议�
 - 客户端更新：stderr 警告一次（提示运维方升级 qatlasd），继续执行；
 - 响应无版本头或版本无法解析：跳过协商；info 接口 404 视为老服务端，仍允许写。
 
+服务端推断的 ID / 版本默认值通过 `X-QAtlas-Defaults-Applied` 在 stderr 显示，
+`--quiet-notes` 可关闭。新服务端使用 ASCII 头；CLI 也兼容旧服务端的 UTF-8
+箭头字节，仅修复已知箭头乱码，不猜测或重新解码其他合法 Latin-1 内容，
+不修改响应正文或 JSON stdout。
+
 完整策略见主仓文档：
 [QuantumAtlas 版本与兼容策略](https://github.com/IAI-USTC-Quantum/QuantumAtlas/blob/main/docsite/dev/versioning.rst)。
 
