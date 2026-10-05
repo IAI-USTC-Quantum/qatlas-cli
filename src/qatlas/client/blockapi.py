@@ -290,8 +290,8 @@ def _request(
         headers["Content-Type"] = "application/json"
         payload = json.dumps(json_body, ensure_ascii=False)
         if write:
-            # §12.2: deterministic key derived from the exact request so
-            # timeouts can be retried safely (server replays the result).
+            # Deterministic key for the exact request. Replay guarantees
+            # belong to each server endpoint; never automatically retry.
             headers["Idempotency-Key"] = idempotency_key(method, url_path, payload)
     else:
         payload = None
@@ -299,11 +299,14 @@ def _request(
     verify = request_verify(args)
     url = f"{base_url.rstrip('/')}{url_path}"
     session = http_session()
+    request_started = False
     try:
         if write:
             check_server_before_write(
                 base_url, headers=headers, timeout=args.request_timeout, verify=verify
             )
+        # Only failures after this point can have an ambiguous write outcome.
+        request_started = True
         resp = session.request(
             method,
             url,
@@ -316,20 +319,25 @@ def _request(
             allow_redirects=True,
         )
     except requests.RequestException as exc:
+        hint = None
+        if write:
+            if not request_started:
+                hint = "Write request was not sent; resolve the preflight failure first."
+            else:
+                hint = (
+                    "Write result is UNKNOWN — the request may have reached the "
+                    "server. No automatic retry was attempted. The same method, "
+                    "path and body re-derive the same Idempotency-Key; check server "
+                    "state and the endpoint's idempotency contract before resubmitting. "
+                    "Do not assume failure and double-submit different content."
+                )
         raise ApiError(
             f"{what} failed: {exc}",
             kind="transport",
             exit_code=EXIT_TRANSPORT,
-            hint=(
-                "for writes the result may be UNKNOWN — the request may have "
-                "reached the server. Retrying is safe (the same body re-derives "
-                "the same Idempotency-Key and the server replays the original "
-                "result); do not assume failure and double-submit different content."
-                if write
-                else None
-            ),
+            hint=hint,
         ) from exc
-    check_response_version(resp, write=write)
+    check_response_version(resp, write=write, request_sent=True)
     if not 200 <= resp.status_code < 300:
         raise _error_from_response(resp, what=what, write=write)
     return resp

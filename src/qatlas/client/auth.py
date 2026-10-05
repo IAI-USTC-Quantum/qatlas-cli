@@ -78,6 +78,7 @@ from typing import Any, Optional
 import requests
 import yaml
 
+from qatlas._http import write_request
 from qatlas.paths import user_config_dir
 
 # Filename of the per-host credentials store inside the user config dir.
@@ -470,7 +471,8 @@ def _device_login(
         "expires_in_days": expires_days,
     }
     try:
-        resp = requests.post(
+        resp = write_request(
+            requests.post,
             f"{base_url}/api/oauth/device/code",
             json=init_body,
             verify=verify,
@@ -530,17 +532,21 @@ def _device_login(
         # immediately after /code returns.
         time.sleep(cur_interval)
         try:
-            poll = requests.post(
+            poll = write_request(
+                requests.post,
                 f"{base_url}/api/oauth/device/token",
                 json={"device_code": device_code},
                 verify=verify,
                 timeout=15,
             )
         except requests.RequestException as exc:
-            # Treat network blips as recoverable; the deadline check
-            # above will fire if they persist.
-            print(f"  (poll error: {exc}; retrying)", file=sys.stderr)
-            continue
+            # A lost successful token response may already have consumed the
+            # code/minted a PAT. Continue only on explicit pending/slow_down
+            # responses below, never retry an ambiguous transport failure.
+            raise _DeviceFlowError(
+                f"device token result UNKNOWN; check server authorization state "
+                f"before starting another login: {exc}"
+            ) from exc
 
         if poll.status_code == 200:
             try:

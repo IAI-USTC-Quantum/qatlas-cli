@@ -19,10 +19,12 @@ from __future__ import annotations
 
 import sys
 import time
+from functools import partial
 from typing import Any, Callable
 
 import requests
 
+from qatlas._http import write_request
 from qatlas.client.plugins.base import CliContext
 
 _WARNED_INSECURE = False
@@ -62,6 +64,8 @@ def server_request(
     newer server with ``SystemExit(4)`` before sending the write. Failed
     probes raise ``requests.RequestException`` (404 permits legacy servers).
     Actual write responses only warn on version drift; writes are not retried.
+    A write transport error emits UNKNOWN and re-raises the identical requests
+    exception; no idempotency or safe-resubmission guarantee is implied.
 
     ``path`` is joined onto ``ctx.server_base_url`` (leading slash optional).
     Raises ``ValueError`` when no server is configured.
@@ -85,7 +89,10 @@ def server_request(
         check_server_before_write(
             base, headers=headers, timeout=request_timeout, verify=verify
         )
-    response = requests.request(
+    # POST is also used for read-only search; only explicit writes gain the
+    # ambiguous-outcome diagnostic. The preflight stays outside this wrapper.
+    request = partial(write_request, requests.request) if write else requests.request
+    response = request(
         method,
         url,
         json=json,

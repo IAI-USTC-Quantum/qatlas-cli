@@ -136,9 +136,11 @@ qatlas comments status <discussion_id> confirmed --reason "已对照原图确认
 
 要点：
 
-- 写操作自动携带确定性幂等键（SHA-256(method|path|body)），超时后重发同一
-  请求会回放原结果，不会重复发帖；`edit` 自动取当前 revision 做 `If-Match`
-  CAS，过期修订按 409（退出码 6）拒绝。
+- 评论写操作自动携带确定性幂等键（SHA-256(method|path|body)），发送后丢失
+  响应会明确提示结果可能为 **UNKNOWN**，不会自动重试；重发相同正文、方法
+  和路径会回放原结果，不要通过改正文/换键来重复发帖。写前版本探测失败则
+  明确提示**请求未发送**，不会误报 UNKNOWN。`edit` 自动取当前 revision 做
+  `If-Match` CAS，过期修订按 409（退出码 6）拒绝。
 - 正文上限 20,000 Unicode 字符（客户端镜像检查，超限退出码 2 并提示拆分）；
   分页 per_page 默认 20、上限 100，游标翻页。
 - 原件缓存按「服务来源 + qa_ + 固定 sha256」内容寻址，配置项 `cache_dir`
@@ -195,7 +197,19 @@ qatlas-cli 与服务端 qatlasd **各自独立演进版本号**，兼容协议�
 - 服务端更新且为写：探测阶段硬失败（exit code 4），提示 `uv tool upgrade qatlas-cli`，**不发送写请求**。探测失败（404 除外）同样不发送。请求已发出后版本变化只警告，不表示写入被拒绝或未发出；
 - 服务端更新且为读：stderr 警告一次，继续执行；
 - 客户端更新：stderr 警告一次（提示运维方升级 qatlasd），继续执行；
-- 响应无版本头或版本无法解析：跳过协商；info 接口 404 视为老服务端，仍允许写。
+- 响应无版本头或版本无法解析：跳过协商；info 接口 404 视为旧接口，但仍检查
+  版本头，已知更新的服务端不能借 404 绕过写前拒绝。探测不跟随重定向。
+
+所有实际写请求（fetch、插件显式 `write=True`、lease、贡献上传、MinerU
+提交/上传/清理、设备认证）发送阶段发生传输异常时都会在 stderr 明确提示
+结果为 **UNKNOWN**；异常类型和既有退出码保留，不自动重试。`paper fetch`
+和通用插件写没有客户端幂等回放保证，不能把网络失败等同未写入，也不能把
+重复 enqueue 说成安全重试；先核对 jobs / 元数据等服务端状态。版本 preflight
+失败仍只说**未发送**，不会提示 UNKNOWN。设备认证和内部 lease 清理仍沿用
+既有无版本 preflight 流程；清理继续 best-effort，不遮蔽原异常。设备 token
+只对服务端明确返回的 pending / slow_down 继续轮询，丢失 token 响应时不盲目重试登录。
+MinerU `--watch` 捕获到 UNKNOWN 后停止当前监视并退出 `1`，不会在下一轮
+重新提交同一队列；读状态轮询和明确的服务端 quota/backoff 响应不受影响。
 
 服务端推断的 ID / 版本默认值通过 `X-QAtlas-Defaults-Applied` 在 stderr 显示，
 `--quiet-notes` 可关闭。新服务端使用 ASCII 头；CLI 也兼容旧服务端的 UTF-8

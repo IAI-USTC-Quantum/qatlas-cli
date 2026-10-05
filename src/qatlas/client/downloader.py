@@ -23,6 +23,7 @@ from typing import Any
 
 import requests
 
+from qatlas._http import write_request
 from qatlas.client._common import (
     add_common_http_args,
     auth_headers,
@@ -87,7 +88,8 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     check_server_before_write(
         base_url, headers=headers, timeout=args.request_timeout, verify=verify
     )
-    resp = requests.post(
+    resp = write_request(
+        requests.post,
         f"{base_url}/api/downloader/fetch",
         json={"items": items},
         headers=headers,

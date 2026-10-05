@@ -127,7 +127,7 @@ def write_case(request, tmp_path):
 
 
 def mock_http(monkeypatch, case, probe_response=None, probe_error=None,
-              write_version="0.34.0"):
+              write_version="0.34.0", write_error=None):
     events = []
     handles = []
     result_response = response(case.status, write_version)
@@ -159,6 +159,8 @@ def mock_http(monkeypatch, case, probe_response=None, probe_error=None,
             (_, fh, _) = kwargs["files"][case.file_field]
             assert fh.read() == case.file_content
             handles.append(fh)
+        if write_error is not None:
+            raise write_error
         return result_response
 
     get = Mock(side_effect=probe)
@@ -221,14 +223,17 @@ def test_probe_failure_never_sends_write(write_case, monkeypatch, failure, capsy
     probe = response(failure) if isinstance(failure, int) else None
     http = mock_http(monkeypatch, write_case, probe, error)
     result = _common.run_with_request_errors(write_case.call)
+    err = capsys.readouterr().err
     if write_case.kind == "mineru-claim":
         assert result[0] is None and "write request was not sent" in result[1]
+        assert "UNKNOWN" not in result[1]
     else:
         assert result == 1
-        assert "write request was not sent" in capsys.readouterr().err
+        assert "write request was not sent" in err
     assert http.events == ["probe"]
     for mock in http.writes.values():
         mock.assert_not_called()
+    assert "UNKNOWN" not in err
 
 
 def test_write_response_version_drift_warns_without_refusal_or_retry(
@@ -417,3 +422,46 @@ def test_actual_cli_write_command_refuses_before_post_or_delete(monkeypatch, com
 ])
 def test_existing_parser_accepts_pep440_and_go_rc_versions(version, expected):
     assert _common._parse_semver(version) == expected
+
+
+@pytest.mark.parametrize("error_type", [
+    requests.Timeout, requests.ConnectionError,
+    requests.exceptions.ChunkedEncodingError, requests.exceptions.SSLError,
+])
+def test_every_business_write_preserves_transport_exception_and_reports_unknown(
+    write_case, monkeypatch, capsys, error_type,
+):
+    error = error_type("write response lost")
+    http = mock_http(monkeypatch, write_case, write_error=error)
+    if write_case.kind == "mineru-claim":
+        result, skip = write_case.call()
+        assert result is None
+        assert "UNKNOWN" in skip and "write response lost" in skip
+    else:
+        with pytest.raises(error_type) as caught:
+            write_case.call()
+        assert caught.value is error
+        assert str(caught.value) == "write response lost"
+        assert type(caught.value) is error_type
+    assert http.events == ["probe", "mutation"]
+    assert sum(mock.call_count for mock in http.writes.values()) == 1
+    assert all(fh.closed for fh in http.handles)
+    err = capsys.readouterr().err
+    assert "UNKNOWN" in err and "No automatic retry" in err
+    assert "was not sent" not in err
+    assert "Retrying is safe" not in err
+    assert "Check server state" in err
+
+
+def test_plugin_read_post_transport_failure_is_not_reported_as_unknown_write(monkeypatch, capsys):
+    error = requests.Timeout("read failed")
+    request = Mock(side_effect=error)
+    get = Mock(side_effect=AssertionError("read must not preflight"))
+    monkeypatch.setattr(requests, "request", request)
+    monkeypatch.setattr(requests, "get", get)
+    with pytest.raises(requests.Timeout) as caught:
+        pluginsupport.server_request(CliContext(server_base_url=BASE), "POST", "/api/search")
+    assert caught.value is error
+    assert "UNKNOWN" not in capsys.readouterr().err
+    request.assert_called_once()
+    get.assert_not_called()
